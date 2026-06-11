@@ -95,17 +95,34 @@
       <div class="card card-blue"><div class="card-label">Total Contacts</div><div class="card-value" id="statTotal">—</div></div>
       <div class="card card-green"><div class="card-label">Core ICP</div><div class="card-value" id="statCore">—</div></div>
       <div class="card card-yellow"><div class="card-label">Strong ICP</div><div class="card-value" id="statStrong">—</div></div>
+      <div class="card card-purple"><div class="card-label">Moderate ICP</div><div class="card-value" id="statModerate">—</div></div>
       <div class="card card-red"><div class="card-label">Non ICP</div><div class="card-value" id="statNon">—</div></div>
+    </div>
+    <div class="segment-section">
+      <div class="segment-section-title">Segment Breakdown</div>
+      <div class="segment-cards-row" id="segmentCardsRow">
+        <p style="color:var(--muted);font-size:13px">Loading…</p>
+      </div>
     </div>
     <div class="charts-row">
       <div class="chart-box"><h3>ICP Distribution</h3><div class="chart-wrap"><canvas id="chartCategory"></canvas></div></div>
       <div class="chart-box"><h3>Top Geographies</h3><div class="chart-wrap"><canvas id="chartGeo"></canvas></div></div>
     </div>
     <div class="table-box">
-      <h3>High-Priority Leads</h3>
+      <div class="table-box-header">
+        <h3>High-Priority Leads</h3>
+        <select id="prioritySegmentFilter" class="filter-select" onchange="filterPriorityLeads()" style="width:180px">
+          <option value="">All Segments</option>
+          <option value="SMB">SMB</option>
+          <option value="MSP">MSP</option>
+          <option value="Large MSP">Large MSP</option>
+          <option value="Enterprise">Enterprise</option>
+          <option value="Others">Others</option>
+        </select>
+      </div>
       <div class="table-scroll">
-        <table><thead><tr><th>Name / Email</th><th>Score</th><th>Category</th><th>Priority</th></tr></thead>
-          <tbody id="tbodyPriority"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody>
+        <table><thead><tr><th>Name / Email</th><th>Segment</th><th>Score</th><th>Category</th><th>Priority</th></tr></thead>
+          <tbody id="tbodyPriority"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -116,22 +133,13 @@
 
     <!-- Top bar: source tabs + filters -->
     <div class="rep-top-bar">
-      <div class="source-tabs">
-        <button class="source-tab source-tab-active" id="tabHubspotData" onclick="setRepSource('hubspot')">
-          <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" style="margin-right:5px;vertical-align:-2px"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
-          HubSpot Data
-        </button>
-        <button class="source-tab" id="tabFileUploads" onclick="setRepSource('uploads')">
-          <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" style="margin-right:5px;vertical-align:-2px"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11z"/></svg>
-          File Uploads
-        </button>
-      </div>
+      <div class="source-tabs"></div>
       <div class="rep-filters">
         <select class="filter-select" id="repFilterPeriod" onchange="onRepPeriodChange()">
-          <option value="this_week" selected>This Week</option>
+          <option value="all" selected>All Time</option>
+          <option value="this_week">This Week</option>
           <option value="this_month">This Month</option>
           <option value="last_3months">Last 3 Months</option>
-          <option value="all">All Time</option>
           <option value="custom">Custom Range</option>
         </select>
         <div class="rep-custom-dates hidden" id="repCustomDates">
@@ -143,51 +151,15 @@
         <select class="filter-select" id="repFilterTeam" onchange="loadRepTracker()">
           <option value="">All Teams</option>
         </select>
-        <select class="filter-select" id="repFilterRep" onchange="loadRepTracker()">
-          <option value="">All Reps</option>
-        </select>
         <button class="btn btn-secondary" id="btnManageReps" onclick="openRepModal()">Manage Reps &amp; Teams</button>
       </div>
     </div>
 
     <!-- HubSpot Sync Panel (shown only in HubSpot mode) -->
-    <div class="sync-panel" id="repSyncPanel">
-      <div class="sync-panel-info">
-        <div class="sync-last-time">
-          <span class="sync-label">Last Sync:</span>
-          <span id="lastSyncTime" style="color:#8892aa;font-size:13px">Never synced</span>
-        </div>
-        <div class="sync-date-row">
-          <span style="color:#8892aa;font-size:12px;white-space:nowrap">Sync by:</span>
-          <select class="filter-select" id="syncDateField" style="width:185px">
-            <option value="createdate">Contact Create Date</option>
-            <option value="ownerAssignedDate">Owner Assigned Date</option>
-          </select>
-          <input type="date" class="admin-input" id="syncDateFrom" style="width:140px" />
-          <span style="color:#8892aa;padding:0 4px">→</span>
-          <input type="date" class="admin-input" id="syncDateTo" style="width:140px" />
-        </div>
-      </div>
-      <div class="sync-panel-actions">
-        <button class="btn btn-primary" id="btnSyncHubspot" onclick="syncRepTrackerFromHubSpot()">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="margin-right:5px;vertical-align:-2px"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/></svg>
-          Sync from HubSpot
-        </button>
-        <button class="btn btn-secondary" id="btnRescoreAll" onclick="rescoreRepTrackerLeads()">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="margin-right:5px;vertical-align:-2px"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
-          Re-score All Leads
-        </button>
-        <div class="sync-progress hidden" id="syncProgress">
-          <div class="spinner"></div>
-          <span id="syncProgressMsg">Syncing…</span>
-        </div>
-      </div>
-    </div>
 
     <!-- Summary cards (7) -->
     <div class="cards-row cards-row-7">
       <div class="card card-blue"><div class="card-label">Total Leads</div><div class="card-value" id="repStatLeads">—</div></div>
-      <div class="card card-orange"><div class="card-label">MQLs</div><div class="card-value" id="repStatMQLs">—</div></div>
       <div class="card card-teal"><div class="card-label">Avg ICP Score</div><div class="card-value" id="repStatAvgScore">—</div></div>
       <div class="card card-indigo"><div class="card-label">Core ICP</div><div class="card-value" id="repStatCore">—</div></div>
       <div class="card card-green"><div class="card-label">Strong ICP</div><div class="card-value" id="repStatStrong">—</div></div>
@@ -204,7 +176,6 @@
     <!-- Charts row 2 -->
     <div class="charts-row">
       <div class="chart-box"><h3>Score Distribution</h3><div class="chart-wrap chart-wrap-lg"><canvas id="chartScoreDist"></canvas></div></div>
-      <div class="chart-box"><h3>MQL Count by Rep</h3><div class="chart-wrap chart-wrap-lg"><canvas id="chartMqlByRep"></canvas></div></div>
     </div>
 
     <!-- Rep Leaderboard -->
@@ -214,11 +185,10 @@
         <table>
           <thead><tr>
             <th>Rep / Owner</th><th>Team</th><th>Total Leads</th>
-            <th>MQLs</th><th>Avg ICP Score</th>
+            <th>Avg ICP Score</th>
             <th>Core ICP</th><th>Strong ICP</th><th>Moderate ICP</th><th>Non ICP</th>
-            <th>80–100</th><th>65–79</th><th>50–64</th><th>0–49</th>
           </tr></thead>
-          <tbody id="tbodyRepLeaderboard"><tr><td colspan="13" class="empty">No data yet. Sync from HubSpot or upload files with a rep selected.</td></tr></tbody>
+          <tbody id="tbodyRepLeaderboard"><tr><td colspan="8" class="empty">No data yet. Sync from HubSpot or upload files with a rep selected.</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -228,19 +198,8 @@
       <h3>Team Breakdown</h3>
       <div class="table-scroll">
         <table>
-          <thead><tr><th>Team</th><th>Reps</th><th>Total Leads</th><th>MQLs</th><th>Avg ICP</th><th>Core ICP</th><th>Strong ICP</th><th>Non ICP</th></tr></thead>
-          <tbody id="tbodyTeamBreakdown"><tr><td colspan="8" class="empty">No teams created yet.</td></tr></tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- Recent Uploads (file uploads mode only) -->
-    <div class="table-box hidden" id="repUploadsSection">
-      <h3>Recent Uploads</h3>
-      <div class="table-scroll">
-        <table>
-          <thead><tr><th>Date</th><th>Rep</th><th>Team</th><th>File</th><th>Leads</th><th>Core</th><th>Strong</th><th>Actions</th></tr></thead>
-          <tbody id="tbodyRecentUploads"><tr><td colspan="8" class="empty">No uploads yet.</td></tr></tbody>
+          <thead><tr><th>Team</th><th>Reps</th><th>Total Leads</th><th>Avg ICP</th><th>Core ICP</th><th>Strong ICP</th><th>Non ICP</th></tr></thead>
+          <tbody id="tbodyTeamBreakdown"><tr><td colspan="7" class="empty">No teams created yet.</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -398,13 +357,13 @@
     <!-- ── Results ── -->
     <div id="pullResults" class="hidden">
 
-      <!-- Summary row -->
-      <div class="hs-results-summary">
-        <div class="cards-row" id="pullStatsCards"></div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <button class="btn btn-secondary" id="btnPullDownloadCSV">Download CSV</button>
-          <span class="hs-result-count" id="pullResultCount"></span>
-        </div>
+      <!-- Summary cards — full-width horizontal row -->
+      <div class="cards-row cards-row-5" id="pullStatsCards" style="margin-bottom:16px"></div>
+
+      <!-- Download / count row -->
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
+        <button class="btn btn-secondary" id="btnPullDownloadCSV">Download CSV</button>
+        <span class="hs-result-count" id="pullResultCount"></span>
       </div>
 
       <!-- Enrichment banner -->
@@ -505,6 +464,7 @@
           <h3>Enriched &amp; Scored Leads</h3>
           <div style="display:flex;gap:8px;align-items:center">
             <button class="btn btn-secondary" id="btnDownloadCSV">Download CSV</button>
+            <button class="btn btn-primary" id="btnDownloadExcel">Download Excel</button>
           </div>
         </div>
         <div class="table-scroll">
@@ -544,13 +504,25 @@
 
   <!-- ══════════════ CONTACTS ════════════════════════════════════════════════ -->
   <section class="view" id="view-contacts">
-    <div class="toolbar">
+    <div class="toolbar" style="flex-wrap:wrap;gap:8px">
       <input class="search-input" id="contactSearch" placeholder="Search by name or email…" />
       <select class="filter-select" id="filterCategory">
         <option value="">All Categories</option>
         <option>Core ICP</option><option>Strong ICP</option>
         <option>Moderate ICP</option><option>Non ICP</option>
       </select>
+      <select class="filter-select" id="filterSegment">
+        <option value="">All Segments</option>
+        <option value="SMB">SMB</option>
+        <option value="MSP">MSP</option>
+        <option value="Large MSP">Large MSP</option>
+        <option value="Enterprise">Enterprise</option>
+        <option value="Others">Others</option>
+      </select>
+      <input type="date" class="admin-input" id="filterDateFrom" style="width:140px" title="From date" />
+      <span style="color:#8892aa;font-size:13px">→</span>
+      <input type="date" class="admin-input" id="filterDateTo" style="width:140px" title="To date" />
+      <button class="btn btn-secondary" onclick="filterContacts()">Apply</button>
     </div>
     <div class="table-box">
       <div class="table-scroll">

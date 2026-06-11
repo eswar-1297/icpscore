@@ -50,6 +50,7 @@ function migrate(db) {
       create_date       TEXT,
       mql_date          TEXT,
       hs_analytics_source TEXT,
+      size_of_business    TEXT,
       -- ICP scoring
       icp_score         INTEGER,
       icp_category      TEXT,
@@ -129,6 +130,8 @@ function migrate(db) {
     CREATE INDEX IF NOT EXISTS idx_contacts_lifecycle ON contacts(lifecyclestage);
     CREATE INDEX IF NOT EXISTS idx_contacts_synced   ON contacts(synced_at);
   `);
+  // Add size_of_business column to existing DBs (safe to re-run)
+  try { db.exec(`ALTER TABLE contacts ADD COLUMN size_of_business TEXT`); } catch (_) {}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -144,7 +147,7 @@ function upsertContact(c) {
       lifecyclestage, lead_source, mql_type,
       source_cloud, destination_cloud, type_of_destination, tech_stack,
       hubspot_owner_id, owner_assigned_date, create_date, mql_date,
-      hs_analytics_source,
+      hs_analytics_source, size_of_business,
       icp_score, icp_category, icp_priority, breakdown_json, last_scored_at,
       synced_at, raw_properties
     ) VALUES (
@@ -153,13 +156,17 @@ function upsertContact(c) {
       @lifecyclestage, @lead_source, @mql_type,
       @source_cloud, @destination_cloud, @type_of_destination, @tech_stack,
       @hubspot_owner_id, @owner_assigned_date, @create_date, @mql_date,
-      @hs_analytics_source,
+      @hs_analytics_source, @size_of_business,
       @icp_score, @icp_category, @icp_priority, @breakdown_json, @last_scored_at,
       @synced_at, @raw_properties
     )
   `);
   stmt.run(c);
 }
+
+const clearContacts = () => {
+  getDb().prepare('DELETE FROM contacts').run();
+};
 
 const upsertContactsBatch = (contacts) => {
   const db = getDb();
@@ -170,7 +177,7 @@ const upsertContactsBatch = (contacts) => {
       lifecyclestage, lead_source, mql_type,
       source_cloud, destination_cloud, type_of_destination, tech_stack,
       hubspot_owner_id, owner_assigned_date, create_date, mql_date,
-      hs_analytics_source,
+      hs_analytics_source, size_of_business,
       icp_score, icp_category, icp_priority, breakdown_json, last_scored_at,
       synced_at, raw_properties
     ) VALUES (
@@ -179,7 +186,7 @@ const upsertContactsBatch = (contacts) => {
       @lifecyclestage, @lead_source, @mql_type,
       @source_cloud, @destination_cloud, @type_of_destination, @tech_stack,
       @hubspot_owner_id, @owner_assigned_date, @create_date, @mql_date,
-      @hs_analytics_source,
+      @hs_analytics_source, @size_of_business,
       @icp_score, @icp_category, @icp_priority, @breakdown_json, @last_scored_at,
       @synced_at, @raw_properties
     )
@@ -494,30 +501,87 @@ function getDashboardStats() {
   categories.forEach(r => { categoryCount[r.icp_category] = r.cnt; });
 
   const geoRows = db.prepare(`
-    SELECT COALESCE(country, 'Unknown') as country, COUNT(*) as cnt FROM contacts
-    GROUP BY country ORDER BY cnt DESC LIMIT 15
+    SELECT
+      CASE
+        WHEN LOWER(TRIM(country)) IN ('united states','us','usa','u.s.','u.s.a.','united states of america') THEN 'USA'
+        WHEN LOWER(TRIM(country)) IN ('united kingdom','uk','gb','great britain','england','scotland','wales','northern ireland') THEN 'UK'
+        WHEN LOWER(TRIM(country)) IN ('canada','ca') THEN 'Canada'
+        WHEN LOWER(TRIM(country)) IN ('australia','au') THEN 'Australia'
+        WHEN LOWER(TRIM(country)) IN ('india','in') THEN 'India'
+        WHEN LOWER(TRIM(country)) IN (
+          'germany','de','france','fr','spain','es','italy','it','netherlands','nl',
+          'belgium','be','sweden','se','norway','no','denmark','dk','finland','fi',
+          'poland','pl','czech republic','cz','austria','at','switzerland','ch',
+          'portugal','pt','greece','gr','hungary','hu','romania','ro','bulgaria','bg',
+          'croatia','hr','slovakia','sk','slovenia','si','estonia','ee','latvia','lv',
+          'lithuania','lt','luxembourg','lu','malta','mt','cyprus','cy','ireland','ie',
+          'iceland','is','liechtenstein'
+        ) THEN 'Europe'
+        ELSE NULL
+      END AS region,
+      COUNT(*) as cnt
+    FROM contacts
+    WHERE region IS NOT NULL
+    GROUP BY region
   `).all();
   const geographyCount = {};
-  geoRows.forEach(r => { geographyCount[r.country] = r.cnt; });
+  geoRows.forEach(r => { geographyCount[r.region] = r.cnt; });
 
   const highPriority = db.prepare(`
-    SELECT hubspot_id, name, email, icp_score, icp_category, icp_priority
+    SELECT hubspot_id, name, email, icp_score, icp_category, icp_priority,
+           size_of_business
     FROM contacts
     WHERE icp_priority IN ('Highest Priority', 'High Priority')
-    ORDER BY icp_score DESC LIMIT 50
-  `).all().map(r => ({
-    id: r.hubspot_id, name: r.name, email: r.email,
-    score: r.icp_score, category: r.icp_category, priority: r.icp_priority
-  }));
+    ORDER BY icp_score DESC LIMIT 1000
+  `).all().map(r => {
+    let segment = r.size_of_business && r.size_of_business.trim()
+      ? r.size_of_business.trim()
+      : 'Others';
+    return {
+      id: r.hubspot_id, name: r.name, email: r.email,
+      score: r.icp_score, category: r.icp_category, priority: r.icp_priority,
+      segment
+    };
+  });
 
   return { total, scored, categoryCount, geographyCount, highPriority };
+}
+
+function getSegmentStats() {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT
+      CASE
+        WHEN size_of_business IS NOT NULL AND TRIM(size_of_business) != '' THEN TRIM(size_of_business)
+        ELSE 'Others'
+      END AS segment,
+      COALESCE(icp_category, 'Unscored') AS icp_category,
+      COUNT(*) AS cnt
+    FROM contacts
+    GROUP BY segment, icp_category
+  `).all();
+
+  const CATS = ['Core ICP', 'Strong ICP', 'Moderate ICP', 'Non ICP'];
+  const result = {};
+
+  for (const r of rows) {
+    if (!result[r.segment]) {
+      result[r.segment] = { total: 0 };
+      CATS.forEach(c => { result[r.segment][c] = 0; });
+    }
+    result[r.segment].total += r.cnt;
+    if (CATS.includes(r.icp_category)) result[r.segment][r.icp_category] += r.cnt;
+  }
+
+  return result;
 }
 
 function getContactsList() {
   const db = getDb();
   return db.prepare(`
     SELECT hubspot_id as id, name, email, jobtitle as title, country,
-      icp_score as score, icp_category as category, icp_priority as priority
+      icp_score as score, icp_category as category, icp_priority as priority,
+      size_of_business, numberofemployees, create_date
     FROM contacts ORDER BY create_date DESC
   `).all();
 }
@@ -731,7 +795,7 @@ function migrateFromJsonStore() {
 module.exports = {
   getDb,
   // Contacts
-  upsertContact, upsertContactsBatch, getAllContacts, getContactCount,
+  upsertContact, upsertContactsBatch, clearContacts, getAllContacts, getContactCount,
   updateContactScores,
   // Owners
   upsertOwners, getOwners,
@@ -745,7 +809,7 @@ module.exports = {
   // Uploads
   saveUpload, getUploads, getUpload, deleteUpload,
   // Analytics
-  getDashboardStats, getContactsList, getRepStats,
+  getDashboardStats, getSegmentStats, getContactsList, getRepStats,
   // Migration
   migrateFromJsonStore,
   genId

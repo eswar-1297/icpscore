@@ -1,5 +1,13 @@
 const hubspot = require('@hubspot/api-client');
-const { CONTACT_PROPERTIES, COMPANY_PROPERTIES } = require('./config');
+const { CONTACT_PROPERTIES, COMPANY_PROPERTIES, MANDATORY_LEAD_SOURCES, MANDATORY_TEAM_NAMES, getLastQuarterRange } = require('./config');
+
+// Dynamically include SELECT_COUNTRY_FIELD if set
+function getContactProperties() {
+  const props = [...CONTACT_PROPERTIES];
+  const extra = process.env.SELECT_COUNTRY_FIELD;
+  if (extra && !props.includes(extra)) props.push(extra);
+  return props;
+}
 
 let client;
 
@@ -14,16 +22,42 @@ function getClient() {
 }
 
 // ─── Fetch all contacts (paginated) ──────────────────────────────────────────
-async function getAllContacts() {
+async function getAllContacts({ dateFrom, dateTo } = {}) {
   const hs = getClient();
   const contacts = [];
-  let after;
 
+  // When a date range is given, use the search API (supports filters)
+  if (dateFrom || dateTo) {
+    const filters = [];
+    if (dateFrom) filters.push({ propertyName: 'createdate', operator: 'GTE', value: new Date(dateFrom).getTime().toString() });
+    if (dateTo) {
+      const d = new Date(dateTo);
+      d.setDate(d.getDate() + 1);
+      filters.push({ propertyName: 'createdate', operator: 'LT', value: d.getTime().toString() });
+    }
+    const searchBody = {
+      properties: getContactProperties(),
+      sorts: [{ propertyName: 'createdate', direction: 'DESCENDING' }],
+      limit: 100,
+      filterGroups: [{ filters }]
+    };
+    let after;
+    do {
+      if (after !== undefined) searchBody.after = after;
+      const res = await hs.crm.contacts.searchApi.doSearch(searchBody);
+      contacts.push(...(res.results || []));
+      after = res.paging?.next?.after;
+    } while (after);
+    return contacts;
+  }
+
+  // No date filter — use the basic list API (returns associations inline)
+  let after;
   do {
     const response = await hs.crm.contacts.basicApi.getPage(
       100,
       after,
-      CONTACT_PROPERTIES,
+      getContactProperties(),
       undefined,
       ['companies']   // fetch associated company in one call
     );
@@ -39,7 +73,7 @@ async function getContact(contactId) {
   const hs = getClient();
   return hs.crm.contacts.basicApi.getById(
     contactId,
-    CONTACT_PROPERTIES,
+    getContactProperties(),
     undefined,
     ['companies']
   );
@@ -51,6 +85,31 @@ async function getCompany(companyId) {
   const techField = process.env.TECH_STACK_FIELD || 'technologies';
   const props = Array.from(new Set([...COMPANY_PROPERTIES, techField]));
   return hs.crm.companies.basicApi.getById(companyId, props);
+}
+
+// ─── Batch-fetch companies by IDs (chunks of 100) ────────────────────────────
+// Returns a Map<companyId, properties>
+async function batchGetCompanies(companyIds) {
+  if (!companyIds.length) return new Map();
+  const hs = getClient();
+  const techField = process.env.TECH_STACK_FIELD || 'technologies';
+  const props = Array.from(new Set([...COMPANY_PROPERTIES, techField]));
+  const uniqueIds = [...new Set(companyIds)];
+  const map = new Map();
+
+  for (let i = 0; i < uniqueIds.length; i += 100) {
+    const chunk = uniqueIds.slice(i, i + 100);
+    try {
+      const res = await hs.crm.companies.batchApi.read({
+        inputs: chunk.map(id => ({ id })),
+        properties: props
+      });
+      for (const co of res.results) {
+        map.set(co.id, co.properties);
+      }
+    } catch (_) {}
+  }
+  return map;
 }
 
 // ─── Batch-update contacts ────────────────────────────────────────────────────
@@ -194,9 +253,65 @@ async function getPropertyOptions(objectType, propName) {
   }
 }
 
-// ─── Advanced contact search (owner, team, lead source multi, date range) ─────
+// ─── Resolve team names → IDs for the hubspot_team_id filter ─────────────────
+// hubspot_team_id is a built-in Sales Property that stores numeric team IDs.
+// Its values come from HubSpot's Teams settings (not property options), so we
+// resolve names via the Teams API / Owners API.
+let _teamNameToId = null;
+
+async function resolveTeamNameToIdMap() {
+  if (_teamNameToId) return _teamNameToId;
+  _teamNameToId = {};
+
+  // 1. Try the Teams API first
+  try {
+    const teams = await getHubspotTeams();
+    for (const t of teams) {
+      _teamNameToId[t.name.trim().toLowerCase()] = t.id;
+    }
+    console.log(`[hubspot] Teams API returned ${teams.length} teams:`);
+    teams.forEach(t => console.log(`  - "${t.name}" → id ${t.id}`));
+    if (teams.length) return _teamNameToId;
+  } catch (_) {}
+
+  // 2. Fallback: derive teams from owners
+  try {
+    const owners = await getOwners();
+    for (const o of owners) {
+      for (const t of (o.teams || [])) {
+        _teamNameToId[t.name.trim().toLowerCase()] = t.id;
+      }
+    }
+    const entries = Object.entries(_teamNameToId);
+    console.log(`[hubspot] Derived ${entries.length} teams from owners:`);
+    entries.forEach(([name, id]) => console.log(`  - "${name}" → id ${id}`));
+  } catch (err) {
+    console.error('[hubspot] Failed to resolve teams:', err.message);
+  }
+
+  return _teamNameToId;
+}
+
+async function resolveTeamFilterValues(teamNames) {
+  const fieldName = process.env.HUBSPOT_TEAM_FIELD || 'hubspot_team_id';
+  const nameToId = await resolveTeamNameToIdMap();
+
+  const values = [];
+  for (const name of teamNames) {
+    const id = nameToId[name.trim().toLowerCase()];
+    if (id) {
+      values.push(String(id));
+    } else {
+      console.warn(`[hubspot] Team "${name}" not found in any HubSpot team — skipping`);
+    }
+  }
+  return { fieldName, values };
+}
+
+// ─── Advanced contact search (hubspot_team, lead source multi, date range) ────
 async function searchContactsAdvanced({
   leadSources      = [],
+  hubspotTeams     = [],
   mqlType,
   ownerIds         = [],
   teamId,
@@ -250,6 +365,16 @@ async function searchContactsAdvanced({
     filters.push({ propertyName: 'lead_source', operator: 'IN', values: leadSources });
   }
 
+  // HubSpot Team (built-in Sales Property — stores team IDs, not names)
+  if (hubspotTeams.length) {
+    const { fieldName: teamFieldName, values: teamIds } = await resolveTeamFilterValues(hubspotTeams);
+    if (teamIds.length === 1) {
+      filters.push({ propertyName: teamFieldName, operator: 'EQ', value: teamIds[0] });
+    } else if (teamIds.length > 1) {
+      filters.push({ propertyName: teamFieldName, operator: 'IN', values: teamIds });
+    }
+  }
+
   // Lifecycle stage
   if (lifecycleStage) {
     filters.push({ propertyName: 'lifecyclestage', operator: 'EQ', value: lifecycleStage });
@@ -268,7 +393,7 @@ async function searchContactsAdvanced({
   }
 
   const searchBody = {
-    properties: CONTACT_PROPERTIES,
+    properties: getContactProperties(),
     sorts:      [{ propertyName: 'createdate', direction: 'DESCENDING' }],
     limit:      100
   };
@@ -283,7 +408,6 @@ async function searchContactsAdvanced({
     const res = await hs.crm.contacts.searchApi.doSearch(searchBody);
     contacts.push(...(res.results || []));
     after = res.paging?.next?.after;
-    if (contacts.length >= 1000) break;
   } while (after);
 
   return contacts;
@@ -337,11 +461,29 @@ async function getDashboardData() {
   };
 }
 
+// ─── Central filtered pull: always applies mandatory lead source + team + last quarter filters
+async function pullMandatoryContacts(extraFilters = {}) {
+  const { dateFrom, dateTo } = getLastQuarterRange();
+  const { fieldName, values: teamIds } = await resolveTeamFilterValues(MANDATORY_TEAM_NAMES);
+  console.log(`[pullMandatoryContacts] lead_source IN [${MANDATORY_LEAD_SOURCES.join(', ')}]`);
+  console.log(`[pullMandatoryContacts] ${fieldName} IN [${teamIds.join(', ')}] (teams: ${MANDATORY_TEAM_NAMES.join(', ')})`);
+  console.log(`[pullMandatoryContacts] createdate last quarter: ${dateFrom} → ${dateTo}`);
+
+  return searchContactsAdvanced({
+    ...extraFilters,
+    leadSources:  MANDATORY_LEAD_SOURCES,
+    hubspotTeams: MANDATORY_TEAM_NAMES,
+    dateFrom,
+    dateTo
+  });
+}
+
 module.exports = {
   getClient,
   getAllContacts,
   getContact,
   getCompany,
+  batchGetCompanies,
   batchUpdateContacts,
   updateContact,
   ensureCustomProperties,
@@ -350,5 +492,9 @@ module.exports = {
   getPropertyOptions,
   searchContacts,
   searchContactsAdvanced,
-  getDashboardData
+  getDashboardData,
+  resolveTeamFilterValues,
+  pullMandatoryContacts,
+  MANDATORY_LEAD_SOURCES,
+  MANDATORY_TEAM_NAMES
 };

@@ -1,3 +1,34 @@
+// ─── Mandatory HubSpot pull filters (business requirement) ───────────────────
+// Only contacts matching BOTH conditions are pulled from HubSpot:
+//   Lead Source IN MANDATORY_LEAD_SOURCES  AND  Owner's team IN MANDATORY_TEAM_NAMES
+const MANDATORY_LEAD_SOURCES = [
+  'Manage', 'Manage and Migrate', 'Web_Pricing', 'Chat', 'Email',
+  'Web Contact Form', 'Webapp_Pricing', 'Multi channel',
+  'CF Manage Web_Pricing', 'Migrate', 'Contact'
+];
+
+const MANDATORY_TEAM_NAMES = [
+  'Account Management Team', 'Large MSP/Enterprise', 'SMB Team'
+];
+
+// Returns { dateFrom, dateTo } for the previous calendar quarter.
+// e.g. if today is Apr 1 2026 (Q2) → Q1 2026: { dateFrom: '2026-01-01', dateTo: '2026-03-31' }
+function getLastQuarterRange(now = new Date()) {
+  const curQ  = Math.floor(now.getMonth() / 3);     // 0-based quarter (0=Q1 … 3=Q4)
+  const year  = curQ === 0 ? now.getFullYear() - 1 : now.getFullYear();
+  const prevQ = curQ === 0 ? 3 : curQ - 1;          // previous quarter (0-based)
+  const startMonth = prevQ * 3;                      // 0=Jan, 3=Apr, 6=Jul, 9=Oct
+  const endMonth   = startMonth + 2;
+
+  const pad = n => String(n).padStart(2, '0');
+  const lastDay = new Date(year, endMonth + 1, 0).getDate();
+
+  return {
+    dateFrom: `${year}-${pad(startMonth + 1)}-01`,
+    dateTo:   `${year}-${pad(endMonth + 1)}-${pad(lastDay)}`
+  };
+}
+
 // ─── HubSpot field names ──────────────────────────────────────────────────────
 const CONTACT_PROPERTIES = [
   'firstname', 'lastname', 'email', 'jobtitle', 'phone',
@@ -21,7 +52,10 @@ const CONTACT_PROPERTIES = [
   'source__cloud',             // Source cloud (Box, Dropbox, Slack, etc.)
   'destination_cloud',         // Destination cloud (free text)
   'type_of_destination',       // Destination cloud enum (Office 365, Google Workspace, Teams)
-  'source_destination'         // Source_Cloud alias
+  'source_destination',        // Source_Cloud alias
+  'size_of_business',          // Company size segment (SMB, MSP, Large MSP, Enterprise)
+  'hubspot_team_id'            // Built-in Sales Property: HubSpot Team (stores team ID)
+  // select_country added dynamically via SELECT_COUNTRY_FIELD env var
 ];
 
 const COMPANY_PROPERTIES = [
@@ -115,6 +149,9 @@ const CATEGORIES = [
 ];
 
 module.exports = {
+  MANDATORY_LEAD_SOURCES,
+  MANDATORY_TEAM_NAMES,
+  getLastQuarterRange,
   CONTACT_PROPERTIES,
   COMPANY_PROPERTIES,
   GEO_TIER1,

@@ -106,7 +106,7 @@ body { display: flex; }
 .view.active { display: block; }
 
 /* ── Summary cards ────────────────────────────────────────────────────────── */
-.cards-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+.cards-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 24px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 22px; border-top-width: 3px; }
 .card-blue   { border-top-color: var(--blue-light);   }
 .card-green  { border-top-color: var(--green);  }
@@ -116,6 +116,24 @@ body { display: flex; }
 .card-teal   { border-top-color: var(--teal);   }
 .card-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin-bottom: 8px; }
 .card-value { font-size: 32px; font-weight: 700; }
+
+/* ── Segment breakdown ────────────────────────────────────────────────────── */
+.segment-section { margin-bottom: 24px; }
+.segment-section-title { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin-bottom: 12px; }
+.segment-cards-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+.segment-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; border-top-width: 3px; }
+.seg-title { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+.seg-range { font-size: 10px; font-weight: 400; color: var(--muted); }
+.seg-total { font-size: 28px; font-weight: 700; margin-bottom: 12px; }
+.seg-breakdown { display: flex; flex-direction: column; gap: 6px; }
+.seg-row { display: flex; align-items: center; gap: 7px; font-size: 12.5px; }
+.seg-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot-core     { background: var(--blue-light); }
+.dot-strong   { background: var(--green); }
+.dot-moderate { background: var(--yellow); }
+.dot-non      { background: var(--red); }
+.seg-cat { flex: 1; color: var(--muted); }
+.seg-cnt { font-weight: 700; }
 
 /* ── Charts ───────────────────────────────────────────────────────────────── */
 .charts-row { display: grid; grid-template-columns: 1fr 1.4fr; gap: 16px; margin-bottom: 24px; }

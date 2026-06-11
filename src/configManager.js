@@ -4,111 +4,137 @@ const path = require('path');
 
 const CONFIG_PATH = path.join(__dirname, '..', 'data', 'scoring-config.json');
 
-// ─── Default scoring config ───────────────────────────────────────────────────
 const DEFAULT_CONFIG = {
   companySize: [
-    { label: '> 500 employees',   minEmployees: 501, maxEmployees: null, score: 35 },
-    { label: '250–500 employees', minEmployees: 250, maxEmployees: 500,  score: 25 },
+    { label: '500+ employees',    minEmployees: 500, maxEmployees: null, score: 35 },
+    { label: '250–499 employees', minEmployees: 250, maxEmployees: 499,  score: 25 },
     { label: '50–249 employees',  minEmployees: 50,  maxEmployees: 249,  score: 15 },
-    { label: '< 50 employees',    minEmployees: 0,   maxEmployees: 49,   score: 5  }
+    { label: '1–49 employees',    minEmployees: 1,   maxEmployees: 49,   score: 5  }
   ],
+
   geography: {
     tier1: {
       score: 35,
       countries: [
-        'United States', 'US', 'USA', 'U.S.', 'U.S.A.',
-        'Canada', 'CA',
-        'United Kingdom', 'UK', 'GB', 'Great Britain',
-        'England', 'Scotland', 'Wales', 'Northern Ireland'
+        'United States', 'United States of America', 'US', 'USA', 'U.S.', 'U.S.A.', 'America',
+        'United Kingdom', 'UK', 'GB', 'Great Britain', 'Britain', 'England', 'Scotland', 'Wales',
+        'Canada', 'CA'
       ]
     },
     tier2: {
       score: 25,
       countries: [
-        'Germany', 'France', 'Spain', 'Italy', 'Netherlands', 'Belgium',
-        'Sweden', 'Norway', 'Denmark', 'Finland', 'Poland', 'Czech Republic',
-        'Austria', 'Switzerland', 'Portugal', 'Greece', 'Hungary', 'Romania',
-        'Bulgaria', 'Croatia', 'Slovakia', 'Slovenia', 'Estonia', 'Latvia',
-        'Lithuania', 'Luxembourg', 'Malta', 'Cyprus', 'Ireland', 'Iceland',
-        'Australia', 'India'
+        'India', 'IN',
+        'Australia', 'AU',
+        'Germany', 'DE', 'France', 'FR', 'Italy', 'IT', 'Spain', 'ES',
+        'Netherlands', 'NL', 'Belgium', 'BE', 'Sweden', 'SE',
+        'Norway', 'NO', 'Denmark', 'DK', 'Finland', 'FI',
+        'Poland', 'PL', 'Czech Republic', 'CZ', 'Austria', 'AT',
+        'Switzerland', 'CH', 'Portugal', 'PT', 'Ireland', 'IE',
+        'Iceland', 'IS', 'Luxembourg', 'LU', 'Malta', 'MT',
+        'Cyprus', 'CY', 'Greece', 'GR', 'Hungary', 'HU',
+        'Romania', 'RO', 'Bulgaria', 'BG', 'Croatia', 'HR',
+        'Slovakia', 'SK', 'Slovenia', 'SI', 'Estonia', 'EE',
+        'Latvia', 'LV', 'Lithuania', 'LT',
+        'Europe'
       ]
     },
     other: { score: 10 }
   },
+
   industry: {
     tier1: {
       score: 10,
       keywords: [
         'computer software', 'software', 'information technology',
-        'it services', 'it consulting', 'technology', 'saas', 'tech'
+        'it services', 'it consulting', 'software development',
+        'technology', 'saas', 'internet',
+        'computer & network security', 'computer and network security',
+        'computer networking', 'network security', 'cybersecurity', 'cyber security',
+        'computer hardware', 'semiconductors', 'telecommunications'
       ]
     },
     tier2: {
       score: 8,
       keywords: [
         'financial services', 'finance', 'banking', 'insurance',
-        'marketing', 'advertising', 'digital marketing',
-        'hospital', 'health care', 'healthcare', 'medical', 'pharma', 'biotech'
+        'marketing', 'advertising',
+        'healthcare', 'hospital & health care', 'hospital and health care',
+        'health care', 'medical', 'pharmaceuticals', 'pharma'
       ]
     },
     tier3: {
       score: 6,
       keywords: [
-        'education', 'e-learning', 'elearning', 'higher education',
-        'university', 'school', 'academic', 'training'
+        'education', 'higher education', 'e-learning', 'elearning',
+        'education management', 'primary/secondary education',
+        'primary education', 'secondary education'
       ]
     },
-    other: { score: 4 }
+    other: { score: 4 },
+    none:  { score: 0 }
   },
+
   technology: {
-    // Scored by Destination Cloud (type_of_destination / destination_cloud)
     tier1: {
       score: 10,
       keywords: [
-        'office 365', 'microsoft 365', 'm365', 'o365',
-        'google workspace', 'g suite', 'gsuite'
+        'microsoft 365', 'office 365', 'o365', 'm365', 'microsoft',
+        'onedrive', 'one drive', 'one drives',
+        'sharepoint', 'share point', 'share points',
+        'outlook', 'teams', 'microsoft teams',
+        'ms teams', 'azure', 'office',
+        'google workspace', 'g suite', 'gsuite', 'google', 'google drive',
+        'google cloud', 'gmail', 'google docs', 'google sheets',
+        'google chat', 'google files',
+        'shared drive', 'shared drives', 'share drive', 'share drives'
       ]
     },
     tier2: {
       score: 8,
-      keywords: ['teams', 'microsoft teams']
-    },
-    tier3: {
-      score: 5,
       keywords: [
-        'others', 'other', 'cloud', 'aws', 'azure', 'gcp',
-        'onedrive', 'sharepoint', 'salesforce'
+        'dropbox', 'dropbox business',
+        'box', 'box.com', 'box enterprise',
+        'egnyte',
+        'slack',
+        'sharefile', 'share file', 'citrix sharefile'
       ]
     },
-    none: { score: 0 }
+    tier3: { score: 5 },
+    none:  { score: 0 }
   },
+
   buyerFit: {
     tier1: {
       score: 10,
       keywords: [
-        'cio', 'chief information officer',
-        'cto', 'chief technology officer',
-        'ceo', 'chief executive',
+        'cio', 'cto', 'ceo', 'cfo', 'coo',
+        'chief information officer', 'chief technology officer',
+        'chief executive', 'chief financial officer', 'chief operating officer',
         'it director', 'director of it', 'head of it',
         'vp of it', 'vp it', 'vice president of it',
-        'head of technology', 'vp of technology'
+        'director of technology', 'head of technology', 'vp of technology'
       ]
     },
     tier2: {
       score: 7,
       keywords: [
         'it manager', 'it admin', 'it administrator',
-        'systems administrator', 'sysadmin', 'sys admin',
+        'system administrator', 'systems administrator', 'sysadmin',
         'network administrator', 'infrastructure manager',
-        'it specialist', 'it lead', 'it supervisor'
+        'it operations', 'it specialist'
       ]
     },
     tier3: {
       score: 5,
-      keywords: ['consultant', 'consulting', 'advisor', 'strategist']
+      keywords: [
+        'consultant', 'consulting', 'advisor', 'freelance', 'project manager'
+      ]
     },
-    other: { score: 0 }
+    other: { score: 5 },
+    none:  { score: 0 }
   },
+
   categories: [
     { label: 'Core ICP',     priority: 'Highest Priority', min: 80, max: 100 },
     { label: 'Strong ICP',   priority: 'High Priority',    min: 65, max: 79  },
@@ -117,12 +143,16 @@ const DEFAULT_CONFIG = {
   ]
 };
 
-// ─── Public API ───────────────────────────────────────────────────────────────
-
 function loadConfig() {
   try {
     if (fs.existsSync(CONFIG_PATH)) {
-      return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+      const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+      if (!cfg.industry?.none) cfg.industry.none = { score: 0 };
+      if (!cfg.buyerFit?.none) cfg.buyerFit.none = { score: 0 };
+      if (cfg.buyerFit?.other && cfg.buyerFit.other.score === 0) {
+        cfg.buyerFit.other.score = 5;
+      }
+      return cfg;
     }
   } catch (e) {
     console.warn('[configManager] Failed to load config, using defaults:', e.message);

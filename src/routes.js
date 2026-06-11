@@ -1,10 +1,11 @@
 'use strict';
 const express = require('express');
 const multer  = require('multer');
+const XLSX    = require('xlsx');
 const router  = express.Router();
 
 const hs              = require('./hubspot');
-const { scoreContact, scoreExtractedLead } = require('./scoring');
+const { scoreContact, scoreExtractedLead, parseEmployeeCount } = require('./scoring');
 const { parseLeadsFile }   = require('./fileParser');
 const { enrichLeads }      = require('./apollo');
 const { loadConfig, saveConfig, getDefaultConfig } = require('./configManager');
@@ -63,8 +64,9 @@ router.get('/dashboard', async (req, res) => {
   try {
     // Read from local SQLite — instant!
     const stats = db.getDashboardStats();
+    const segmentStats = db.getSegmentStats();
     const lastSync = db.getLastSync('contacts');
-    res.json({ ok: true, ...stats, lastSync: lastSync?.ended_at || null });
+    res.json({ ok: true, ...stats, segmentStats, lastSync: lastSync?.ended_at || null });
   } catch (err) {
     res.status(500).json({ ok: false, message: err.message });
   }
@@ -183,19 +185,16 @@ router.post('/hubspot/pull-and-score', async (req, res) => {
     } = req.body;
 
     // Normalise legacy params
-    const sources = leadSources || (leadSource ? [leadSource] : []);
-    const stage   = lifecycleStage || lifecycle;
+    const stage = lifecycleStage || lifecycle;
 
-    // 1. Pull contacts from HubSpot with advanced filters
-    const contacts = await hs.searchContactsAdvanced({
-      leadSources:       sources,
+    // 1. Pull contacts from HubSpot — mandatory lead source + team + last-quarter
+    //    date filters are enforced centrally by pullMandatoryContacts
+    const contacts = await hs.pullMandatoryContacts({
       mqlType,
-      ownerIds:          ownerIds || [],
-      teamId,
       ownerAssignedFrom, ownerAssignedTo,
-      dateFrom, dateTo,
-      lifecycleStage:    stage
+      lifecycleStage: stage
     });
+    console.log(`[pull] HubSpot returned ${contacts.length} contacts (mandatory filters applied)`);
 
     if (!contacts.length) {
       return res.json({ ok: true, total: 0, leads: [], message: 'No contacts match your filters.' });
@@ -219,16 +218,15 @@ router.post('/hubspot/pull-and-score', async (req, res) => {
         phone:             p.phone || null,
         jobTitle:          p.jobtitle || null,
         companyName:       null,
-        numberOfEmployees: p.numberofemployees ? Number(p.numberofemployees) : null,
-        country:           p.country || null,
+        numberOfEmployees: parseEmployeeCount(p.numberofemployees),
+        country:           p[process.env.SELECT_COUNTRY_FIELD || 'select_country'] || p.country || null,
         industry:          p.industry || null,
-        // Tech scoring uses destination cloud (what they're migrating TO)
         techStack:         p.type_of_destination || p.destination_cloud || null,
         leadSource:        p.lead_source || p.hs_analytics_source || null,
         leadSourceDetail:  p.hs_analytics_source_data_1 || null,
         mqlType:           p.mql_type || null,
         sourceCloud:       p.source__cloud || p.source_destination || null,
-        destinationCloud:  p.destination_cloud || null,
+        destinationCloud:  p.destination_cloud || p.type_of_destination || null,
         typeOfDestination: p.type_of_destination || null,
         lifecycleStage:    p.lifecyclestage || null,
         createdDate:       p.createdate ? new Date(p.createdate).toISOString().split('T')[0] : null,
@@ -243,22 +241,26 @@ router.post('/hubspot/pull-and-score', async (req, res) => {
       };
     });
 
-    // 4. Fetch associated company data for each contact
+    // 4. Fetch associated company data (batch — one request per 100 companies)
+    const pullCompanyIds = contacts
+      .map(c => c.associations?.companies?.results?.[0]?.id || c.properties?.associatedcompanyid)
+      .filter(Boolean);
+    const pullCompanyMap = await hs.batchGetCompanies(pullCompanyIds);
+    const pullTechField = process.env.TECH_STACK_FIELD || 'technologies';
+
     for (const lead of leads) {
       const contact = contacts.find(c => c.id === lead._hubspotId);
       const companyId = contact?.associations?.companies?.results?.[0]?.id
                      || contact?.properties?.associatedcompanyid;
       if (companyId) {
-        try {
-          const co = await hs.getCompany(companyId);
-          const cp = co.properties;
+        const cp = pullCompanyMap.get(companyId);
+        if (cp) {
           if (!lead.companyName)       lead.companyName = cp.name || null;
-          if (!lead.numberOfEmployees) lead.numberOfEmployees = cp.numberofemployees ? Number(cp.numberofemployees) : null;
+          if (!lead.numberOfEmployees) lead.numberOfEmployees = parseEmployeeCount(cp.numberofemployees);
           if (!lead.country)           lead.country = cp.country || null;
           if (!lead.industry)          lead.industry = cp.industry || null;
-          const techField = process.env.TECH_STACK_FIELD || 'technologies';
-          if (!lead.techStack)         lead.techStack = cp[techField] || null;
-        } catch (_) {}
+          if (!lead.techStack)         lead.techStack = cp[pullTechField] || null;
+        }
       }
     }
 
@@ -294,7 +296,7 @@ router.post('/hubspot/pull-and-score', async (req, res) => {
       try {
         uploadRecord = rep.saveUpload({
           repId,
-          filename: `HubSpot Pull (${ownerAssignedFrom || dateFrom || 'start'}→${ownerAssignedTo || dateTo || 'now'}, source=${(sources||[]).join(',')||'all'})`,
+          filename: `HubSpot Pull (${ownerAssignedFrom || dateFrom || 'start'}→${ownerAssignedTo || dateTo || 'now'}, source=${(leadSources||[]).join(',')||'all'})`,
           leads: scoredLeads,
           enrichStats,
           categoryStats
@@ -326,13 +328,14 @@ router.post('/hubspot/pull-and-score', async (req, res) => {
   }
 });
 
-// GET /api/hubspot/lead-sources — get distinct lead sources from all contacts
+// GET /api/hubspot/lead-sources — get distinct lead sources (only from mandatory-filtered contacts)
 router.get('/hubspot/lead-sources', async (req, res) => {
   try {
-    const contacts = await hs.getAllContacts();
+    const contacts = await hs.pullMandatoryContacts();
     const sources = new Set();
     contacts.forEach(c => {
-      if (c.properties.hs_analytics_source) sources.add(c.properties.hs_analytics_source);
+      if (c.properties.lead_source) sources.add(c.properties.lead_source);
+      else if (c.properties.hs_analytics_source) sources.add(c.properties.hs_analytics_source);
     });
     res.json({ ok: true, sources: Array.from(sources).sort() });
   } catch (err) {
@@ -416,6 +419,126 @@ router.post('/file/analyze', upload.single('file'), async (req, res) => {
     });
   } catch (err) {
     console.error('file/analyze error:', err);
+    res.status(500).json({ ok: false, message: err.message });
+  }
+});
+
+// POST /api/file/download-excel   body: { leads, filename }
+router.post('/file/download-excel', (req, res) => {
+  try {
+    const { leads, filename } = req.body;
+    if (!leads || !leads.length) {
+      return res.status(400).json({ ok: false, message: 'No leads to export' });
+    }
+
+    const wb = XLSX.utils.book_new();
+
+    const outputCols = [
+      'name', 'email', 'companyName', 'jobTitle', 'numberOfEmployees',
+      'country', 'industry', 'sourceCloud', 'destinationCloud', 'sizeOfBusiness',
+      'phone', 'createdDate',
+      'score', 'category', 'priority',
+      'companySizeScore', 'companySizeReason',
+      'geographyScore', 'geographyReason',
+      'industryScore', 'industryReason',
+      'migrationScore', 'migrationReason',
+      'buyerFitScore', 'buyerFitReason'
+    ];
+    const outputHeaders = [
+      'Name', 'Email', 'Company', 'Job Title', 'Employees',
+      'Country', 'Industry', 'Source Platform', 'Destination Platform', 'Size of Business',
+      'Phone', 'Created Date',
+      'ICP Total Score', 'ICP Category', 'ICP Priority',
+      'Company Size Score', 'Company Size Reason',
+      'Geography Score', 'Geography Reason',
+      'Industry Score', 'Industry Reason',
+      'Migration Score', 'Migration Reason',
+      'Buyer Fit Score', 'Buyer Fit Reason'
+    ];
+
+    function leadToRow(l) {
+      return [
+        l.name || '', l.email || '', l.companyName || '', l.jobTitle || '',
+        l.numberOfEmployees || '',
+        l.country || '', l.industry || '',
+        l.sourceCloud || '', l.destinationCloud || l.typeOfDestination || l.techStack || '',
+        l.sizeOfBusiness || '',
+        l.phone || '', l.createdDate || '',
+        l.score ?? '', l.category || '', l.priority || '',
+        l.breakdown?.companySize ?? '', l.reasons?.companySize || '',
+        l.breakdown?.geography ?? '', l.reasons?.geography || '',
+        l.breakdown?.industry ?? '', l.reasons?.industry || '',
+        l.breakdown?.technology ?? '', l.reasons?.technology || '',
+        l.breakdown?.buyerFit ?? '', l.reasons?.buyerFit || ''
+      ];
+    }
+
+    // Sheet 1: All Scored Leads (sorted by score desc)
+    const sorted = [...leads].sort((a, b) => (b.score || 0) - (a.score || 0));
+    const allData = [outputHeaders, ...sorted.map(leadToRow)];
+    const wsAll = XLSX.utils.aoa_to_sheet(allData);
+    XLSX.utils.book_append_sheet(wb, wsAll, 'All Scored Leads');
+
+    // Sheet 2: Summary
+    const cats = ['Core ICP', 'Strong ICP', 'Moderate ICP', 'Non ICP'];
+    const catCounts = {};
+    cats.forEach(c => { catCounts[c] = leads.filter(l => l.category === c).length; });
+
+    const sobGroups = {};
+    leads.forEach(l => {
+      const sob = (l.sizeOfBusiness && l.sizeOfBusiness.trim()) || 'Unassigned';
+      if (!sobGroups[sob]) sobGroups[sob] = [];
+      sobGroups[sob].push(l);
+    });
+
+    const summaryRows = [
+      ['CloudFuze ICP Lead Scoring — Summary'],
+      [],
+      ['Total Leads', leads.length],
+      [],
+      ['ICP Category', 'Count', 'Percentage'],
+      ...cats.map(c => [c, catCounts[c], leads.length ? ((catCounts[c] / leads.length) * 100).toFixed(1) + '%' : '0%']),
+      [],
+      ['Size of Business Breakdown'],
+      ['SOB', 'Total', ...cats],
+      ...Object.entries(sobGroups).map(([sob, sobLeads]) => [
+        sob, sobLeads.length,
+        ...cats.map(c => sobLeads.filter(l => l.category === c).length)
+      ]),
+      [],
+      ['Scoring Rules'],
+      ['Attribute', 'Max Score'],
+      ['Company Size (Employee Count)', '35'],
+      ['Geography (Country/Region)', '35'],
+      ['Industry / Sector', '10'],
+      ['Migration Platform (Source → Destination)', '10'],
+      ['Buyer Fit (Job Title / Role)', '10'],
+      ['Total', '100']
+    ];
+    const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+    XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
+
+    // SOB Sheets
+    const SOB_ORDER = ['SMB', 'Large MSP', 'MSP', 'Enterprise', 'Unassigned'];
+    const allSobKeys = [...new Set([...SOB_ORDER, ...Object.keys(sobGroups)])];
+    for (const sob of allSobKeys) {
+      const sobLeads = sobGroups[sob];
+      if (!sobLeads || !sobLeads.length) continue;
+      const sheetName = `SOB - ${sob}`.slice(0, 31);
+      const sobSorted = [...sobLeads].sort((a, b) => (b.score || 0) - (a.score || 0));
+      const sobData = [outputHeaders, ...sobSorted.map(leadToRow)];
+      const wsSob = XLSX.utils.aoa_to_sheet(sobData);
+      XLSX.utils.book_append_sheet(wb, wsSob, sheetName);
+    }
+
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const dlName = (filename || 'icp_scored_leads').replace(/\.[^.]+$/, '') + '_scored.xlsx';
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${dlName}"`);
+    res.send(Buffer.from(buf));
+  } catch (err) {
+    console.error('file/download-excel error:', err);
     res.status(500).json({ ok: false, message: err.message });
   }
 });
@@ -596,25 +719,12 @@ router.post('/admin/reset', (req, res) => {
 // POST /api/rep-tracker/sync  — pull HubSpot contacts by date range, score, store per-rep
 router.post('/rep-tracker/sync', async (req, res) => {
   try {
-    const {
-      dateFrom, dateTo,
-      dateField     = 'createdate',
-      leadSources   = [],
-      mqlType,
-      lifecycleStage
-    } = req.body;
+    const { mqlType, lifecycleStage } = req.body;
 
-    // Build HubSpot search filters based on chosen dateField
-    const searchParams = { leadSources, mqlType, lifecycleStage };
-    if (dateField === 'ownerAssignedDate') {
-      searchParams.ownerAssignedFrom = dateFrom;
-      searchParams.ownerAssignedTo   = dateTo;
-    } else {
-      searchParams.dateFrom = dateFrom;
-      searchParams.dateTo   = dateTo;
-    }
-
-    const contacts = await hs.searchContactsAdvanced(searchParams);
+    // Mandatory lead source + team + last-quarter date filters enforced centrally
+    const contacts = await hs.pullMandatoryContacts({
+      mqlType, lifecycleStage
+    });
 
     if (!contacts.length) {
       return res.json({ ok: true, added: 0, updated: 0, total: 0, contacts: 0,
@@ -642,12 +752,12 @@ router.post('/rep-tracker/sync', async (req, res) => {
         email:             p.email  || null,
         jobTitle:          p.jobtitle || null,
         companyName:       null,
-        numberOfEmployees: p.numberofemployees ? Number(p.numberofemployees) : null,
-        country:           p.country  || null,
+        numberOfEmployees: parseEmployeeCount(p.numberofemployees),
+        country:           p[process.env.SELECT_COUNTRY_FIELD || 'select_country'] || p.country || null,
         industry:          p.industry || null,
         techStack:         p.type_of_destination || p.destination_cloud || null,
-        sourceCloud:       p.source__cloud       || null,
-        destinationCloud:  p.destination_cloud   || null,
+        sourceCloud:       p.source__cloud || p.source_destination || null,
+        destinationCloud:  p.destination_cloud || p.type_of_destination || null,
         typeOfDestination: p.type_of_destination || null,
         leadSource:        p.lead_source         || null,
         mqlType:           p.mql_type            || null,
@@ -661,22 +771,26 @@ router.post('/rep-tracker/sync', async (req, res) => {
       };
     });
 
-    // Enrich with company data
+    // Enrich with company data (batch fetch instead of one call per contact)
+    const repCompanyIds = contacts
+      .map(c => c.associations?.companies?.results?.[0]?.id || c.properties?.associatedcompanyid)
+      .filter(Boolean);
+    const repCompanyMap = await hs.batchGetCompanies(repCompanyIds);
+    const repTechField = process.env.TECH_STACK_FIELD || 'technologies';
+
     for (const lead of leads) {
       const contact = contacts.find(c => c.id === lead.hubspotId);
       const companyId = contact?.associations?.companies?.results?.[0]?.id
                      || contact?.properties?.associatedcompanyid;
       if (companyId) {
-        try {
-          const co = await hs.getCompany(companyId);
-          const cp = co.properties;
+        const cp = repCompanyMap.get(companyId);
+        if (cp) {
           if (!lead.companyName)       lead.companyName       = cp.name || null;
-          if (!lead.numberOfEmployees) lead.numberOfEmployees = cp.numberofemployees ? Number(cp.numberofemployees) : null;
+          if (!lead.numberOfEmployees) lead.numberOfEmployees = parseEmployeeCount(cp.numberofemployees);
           if (!lead.country)           lead.country           = cp.country  || null;
           if (!lead.industry)          lead.industry          = cp.industry || null;
-          const techField = process.env.TECH_STACK_FIELD || 'technologies';
-          if (!lead.techStack)         lead.techStack         = cp[techField] || null;
-        } catch (_) {}
+          if (!lead.techStack)         lead.techStack         = cp[repTechField] || null;
+        }
       }
     }
 
@@ -800,21 +914,22 @@ router.get('/rep-tracker/hs-stats', (req, res) => {
       ownerId: ownerIds?.length === 1 ? ownerIds[0] : undefined,
       dateFrom, dateTo
     });
-    result.allLeads = leads.map(l => ({
-      name: l.name, email: l.email, jobTitle: l.jobtitle,
-      company: l.company_name, country: l.country,
-      score: l.icp_score, category: l.icp_category, priority: l.icp_priority,
-      leadSource: l.lead_source, destinationCloud: l.type_of_destination || l.destination_cloud,
-      ownerName: null, createDate: l.create_date
-    }));
-
-    // Attach owner names to leads
     const ownerMap = {};
     db.getOwners().forEach(o => { ownerMap[o.id] = o.name; });
-    result.allLeads.forEach(l => {
-      const c = leads.find(c2 => c2.name === l.name && c2.email === l.email);
-      if (c) l.ownerName = ownerMap[c.hubspot_owner_id] || null;
-    });
+
+    result.allLeads = leads.map(l => ({
+      name: l.name, email: l.email, jobTitle: l.jobtitle,
+      companyName: l.company_name, country: l.country,
+      score: l.icp_score, category: l.icp_category, priority: l.icp_priority,
+      leadSource: l.lead_source, destinationCloud: l.type_of_destination || l.destination_cloud,
+      ownerName: ownerMap[l.hubspot_owner_id] || null, createDate: l.create_date
+    }));
+
+    // Top 20 leads by ICP score for the Top Scored Leads table
+    result.topLeads = [...result.allLeads]
+      .filter(l => l.score != null)
+      .sort((a, b) => (b.score || 0) - (a.score || 0))
+      .slice(0, 20);
 
     res.json({ ok: true, ...result });
   } catch (err) {
@@ -846,36 +961,42 @@ router.post('/sync/full', async (req, res) => {
       } catch (_) {}
     }
 
-    // 3. Pull all contacts
-    const contacts = await hs.getAllContacts();
+    // 3. Clear old contacts so the DB reflects only the filtered range
+    db.clearContacts();
 
-    // 4. Build owner map for name lookups
+    // 4. Pull contacts — mandatory lead source + team + last-quarter date filters enforced centrally
+    const contacts = await hs.pullMandatoryContacts();
+    const dates = contacts.map(c => c.properties?.createdate).filter(Boolean).sort();
+    console.log(`[sync] HubSpot returned ${contacts.length} contacts`);
+    if (dates.length) console.log(`[sync] Date range: ${dates[0]} → ${dates[dates.length - 1]}`);
+
+    // 5. Build owner map for name lookups
     const ownerMap = {};
     owners.forEach(o => { ownerMap[o.id] = o; });
+
+    // 4b. Batch-fetch all company data (one request per 100 companies instead of one per contact)
+    const companyIds = contacts
+      .map(c => c.associations?.companies?.results?.[0]?.id || c.properties?.associatedcompanyid)
+      .filter(Boolean);
+    const companyMap = await hs.batchGetCompanies(companyIds);
 
     // 5. Map to DB rows
     const config = loadConfig();
     const rows = [];
+    const techField = process.env.TECH_STACK_FIELD || 'technologies';
 
     for (const c of contacts) {
       const p = c.properties;
       const owner = ownerMap[p.hubspot_owner_id];
 
-      // Fetch company data
-      let companyName = null, companyEmployees = null, companyCountry = null, companyIndustry = null, companyTech = null;
+      // Look up company data from pre-fetched map
       const companyId = c.associations?.companies?.results?.[0]?.id || p.associatedcompanyid;
-      if (companyId) {
-        try {
-          const co = await hs.getCompany(companyId);
-          const cp = co.properties;
-          companyName = cp.name || null;
-          companyEmployees = cp.numberofemployees ? Number(cp.numberofemployees) : null;
-          companyCountry = cp.country || null;
-          companyIndustry = cp.industry || null;
-          const techField = process.env.TECH_STACK_FIELD || 'technologies';
-          companyTech = cp[techField] || null;
-        } catch (_) {}
-      }
+      const cp = companyId ? (companyMap.get(companyId) || null) : null;
+      const companyName = cp?.name || null;
+      const companyEmployees = parseEmployeeCount(cp?.numberofemployees);
+      const companyCountry = cp?.country || null;
+      const companyIndustry = cp?.industry || null;
+      const companyTech = cp ? (cp[techField] || null) : null;
 
       const name = `${p.firstname || ''} ${p.lastname || ''}`.trim() || p.email;
       const techStack = p.type_of_destination || p.destination_cloud || companyTech || null;
@@ -883,9 +1004,11 @@ router.post('/sync/full', async (req, res) => {
       // Score
       const lead = {
         name, email: p.email, jobTitle: p.jobtitle,
-        numberOfEmployees: p.numberofemployees ? Number(p.numberofemployees) : companyEmployees,
-        country: p.country || companyCountry,
+        numberOfEmployees: parseEmployeeCount(p.numberofemployees) || companyEmployees,
+        country: p[process.env.SELECT_COUNTRY_FIELD || 'select_country'] || p.country || companyCountry,
         industry: p.industry || companyIndustry,
+        sourceCloud: p.source__cloud || p.source_destination || null,
+        destinationCloud: p.destination_cloud || p.type_of_destination || null,
         techStack,
         companyName
       };
@@ -899,9 +1022,9 @@ router.post('/sync/full', async (req, res) => {
         name,
         jobtitle:            p.jobtitle || null,
         phone:               p.phone || null,
-        country:             p.country || companyCountry || null,
+        country:             p[process.env.SELECT_COUNTRY_FIELD || 'select_country'] || p.country || companyCountry || null,
         industry:            p.industry || companyIndustry || null,
-        numberofemployees:   p.numberofemployees ? Number(p.numberofemployees) : companyEmployees,
+        numberofemployees:   parseEmployeeCount(p.numberofemployees) || companyEmployees,
         company_name:        companyName,
         lifecyclestage:      p.lifecyclestage || null,
         lead_source:         p.lead_source || null,
@@ -918,6 +1041,7 @@ router.post('/sync/full', async (req, res) => {
         mql_date:            p.hs_lifecyclestage_marketingqualifiedlead_date
           ? new Date(p.hs_lifecyclestage_marketingqualifiedlead_date).toISOString().split('T')[0] : null,
         hs_analytics_source: p.hs_analytics_source || null,
+        size_of_business:    p.size_of_business || null,
         icp_score:           result.score,
         icp_category:        result.category,
         icp_priority:        result.priority,
@@ -980,6 +1104,8 @@ router.post('/sync/rescore', (req, res) => {
         name: c.name, email: c.email, jobTitle: c.jobtitle,
         numberOfEmployees: c.numberofemployees,
         country: c.country, industry: c.industry,
+        sourceCloud: c.source_cloud || null,
+        destinationCloud: c.destination_cloud || c.type_of_destination || null,
         techStack: c.tech_stack, companyName: c.company_name
       };
       const result = scoreExtractedLead(lead, config);

@@ -9,7 +9,6 @@ let chartGeo      = null;
 let chartRepCat   = null;
 let chartWeekly   = null;
 let chartScoreDist = null;
-let chartMqlByRep  = null;
 let allContacts   = [];
 let fileLeads     = [];       // results from last file analysis
 let adminConfig   = null;     // current scoring config in Admin Panel
@@ -196,13 +195,50 @@ async function loadDashboard() {
   try {
     const data = await apiFetch('/dashboard');
     document.getElementById('statTotal').textContent  = data.total;
-    document.getElementById('statCore').textContent   = data.categoryCount['Core ICP']   || 0;
-    document.getElementById('statStrong').textContent = data.categoryCount['Strong ICP'] || 0;
-    document.getElementById('statNon').textContent    = data.categoryCount['Non ICP']    || 0;
+    document.getElementById('statCore').textContent     = data.categoryCount['Core ICP']     || 0;
+    document.getElementById('statStrong').textContent   = data.categoryCount['Strong ICP']   || 0;
+    document.getElementById('statModerate').textContent = data.categoryCount['Moderate ICP'] || 0;
+    document.getElementById('statNon').textContent      = data.categoryCount['Non ICP']      || 0;
+    renderSegmentCards(data.segmentStats || {});
     renderCategoryChart(data.categoryCount);
     renderGeoChart(data.geographyCount);
-    renderPriorityTable(data.highPriority);
+    allHighPriorityLeads = data.highPriority || [];
+    filterPriorityLeads();
   } catch (err) { showToast('Dashboard error: ' + err.message); }
+}
+
+function renderSegmentCards(segs) {
+  const container = document.getElementById('segmentCardsRow');
+  if (!segs || !Object.keys(segs).length) {
+    container.innerHTML = '<p style="color:var(--muted);font-size:13px">No segment data — run a sync first.</p>';
+    return;
+  }
+  const ORDER = ['SMB', 'MSP', 'Large MSP', 'Enterprise', 'Others'];
+  const COLORS = { SMB: '#3b82f6', MSP: '#22c55e', 'Large MSP': '#f59e0b', Enterprise: '#8b5cf6', Others: '#6b7280' };
+  const DEFAULT_COLOR = '#06b6d4';
+  // Sort: known order first, then alphabetically
+  const keys = Object.keys(segs).sort((a, b) => {
+    const ai = ORDER.indexOf(a), bi = ORDER.indexOf(b);
+    if (ai !== -1 && bi !== -1) return ai - bi;
+    if (ai !== -1) return -1;
+    if (bi !== -1) return 1;
+    return a.localeCompare(b);
+  });
+  container.innerHTML = keys.map(seg => {
+    const s = segs[seg];
+    const color = COLORS[seg] || DEFAULT_COLOR;
+    return `
+      <div class="segment-card" style="border-top-color:${color}">
+        <div class="seg-title">${seg}</div>
+        <div class="seg-total">${s.total}</div>
+        <div class="seg-breakdown">
+          <div class="seg-row"><span class="seg-dot dot-core"></span><span class="seg-cat">Core ICP</span><span class="seg-cnt">${s['Core ICP'] || 0}</span></div>
+          <div class="seg-row"><span class="seg-dot dot-strong"></span><span class="seg-cat">Strong ICP</span><span class="seg-cnt">${s['Strong ICP'] || 0}</span></div>
+          <div class="seg-row"><span class="seg-dot dot-moderate"></span><span class="seg-cat">Moderate ICP</span><span class="seg-cnt">${s['Moderate ICP'] || 0}</span></div>
+          <div class="seg-row"><span class="seg-dot dot-non"></span><span class="seg-cat">Non ICP</span><span class="seg-cnt">${s['Non ICP'] || 0}</span></div>
+        </div>
+      </div>`;
+  }).join('');
 }
 
 function renderCategoryChart(counts) {
@@ -233,11 +269,36 @@ function renderGeoChart(counts) {
   });
 }
 
+let allHighPriorityLeads = [];
+
+function filterPriorityLeads() {
+  const seg = document.getElementById('prioritySegmentFilter')?.value || '';
+
+  // Also populate the dropdown with any dynamic segments from the data
+  const dropdown = document.getElementById('prioritySegmentFilter');
+  if (dropdown && allHighPriorityLeads.length) {
+    const known = ['SMB', 'MSP', 'Large MSP', 'Enterprise', 'Others'];
+    const extra = [...new Set(allHighPriorityLeads.map(l => l.segment))].filter(s => s && !known.includes(s)).sort();
+    const current = [...dropdown.options].map(o => o.value);
+    extra.forEach(s => {
+      if (!current.includes(s)) {
+        const opt = document.createElement('option');
+        opt.value = s; opt.textContent = s;
+        dropdown.appendChild(opt);
+      }
+    });
+  }
+
+  const filtered = seg ? allHighPriorityLeads.filter(l => l.segment === seg) : allHighPriorityLeads;
+  renderPriorityTable(filtered);
+}
+
 function renderPriorityTable(leads) {
   const tbody = document.getElementById('tbodyPriority');
-  if (!leads.length) { tbody.innerHTML = '<tr><td colspan="4" class="empty">No high-priority leads. Run scoring first.</td></tr>'; return; }
+  if (!leads.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty">No high-priority leads for this segment.</td></tr>'; return; }
   tbody.innerHTML = leads.map(l => `<tr>
     <td><div style="font-weight:500">${escHtml(l.name)}</div><div style="font-size:12px;color:#8892aa">${escHtml(l.email||'')}</div></td>
+    <td style="font-size:12.5px;color:var(--muted)">${escHtml(l.segment||'—')}</td>
     <td>${scoreBar(l.score)}</td>
     <td>${categoryBadge(l.category)}</td>
     <td>${priorityBadge(l.priority)}</td>
@@ -248,19 +309,9 @@ function renderPriorityTable(leads) {
 //  Rep Tracker
 // ══════════════════════════════════════════════════════════════════════════════
 
-let repDataSource = 'hubspot';   // 'hubspot' | 'uploads'
-
 // ── State ────────────────────────────────────────────────────────────────────
 let allReps  = [];
 let allTeams = [];
-
-function setRepSource(src) {
-  repDataSource = src;
-  document.getElementById('tabHubspotData').classList.toggle('source-tab-active', src === 'hubspot');
-  document.getElementById('tabFileUploads').classList.toggle('source-tab-active', src === 'uploads');
-  document.getElementById('repSyncPanel').classList.toggle('hidden', src === 'uploads');
-  loadRepTracker();
-}
 
 function onRepPeriodChange() {
   const period = document.getElementById('repFilterPeriod').value;
@@ -317,34 +368,21 @@ function populateRepFilters(useHubspot = false) {
   }
   teamSel.value = curTeam;
 
-  // Rep / Owner dropdown
-  const repSel = document.getElementById('repFilterRep');
-  const curRep = repSel.value;
-  if (useHubspot) {
-    repSel.innerHTML = '<option value="">All Owners</option>' +
-      hsOwners.map(o => `<option value="${o.id}">${escHtml(o.name)}</option>`).join('');
-  } else {
-    repSel.innerHTML = '<option value="">All Reps</option>' +
-      allReps.map(r => `<option value="${r.id}">${escHtml(r.name)}${r.teamName ? ' ('+escHtml(r.teamName)+')' : ''}</option>`).join('');
-  }
-  repSel.value = curRep;
 }
 
 async function loadRepSelectorsForUpload() {
+  if (pdfViewReady) return;  // already initialised — keep existing results
   await loadRepsAndTeams();
   const sel     = document.getElementById('uploadRepSelect');
   const current = sel.value;
   sel.innerHTML = '<option value="">— No Rep (skip tracking) —</option>' +
     allReps.map(r => `<option value="${r.id}">${escHtml(r.name)}${r.teamName ? ' ('+escHtml(r.teamName)+')' : ''}</option>`).join('');
   sel.value = current;
+  pdfViewReady = true;
 }
 
 async function loadRepTracker() {
-  if (repDataSource === 'hubspot') {
-    await loadHubspotRepStats();
-  } else {
-    await loadUploadsRepStats();
-  }
+  await loadHubspotRepStats();
 }
 
 // ── HubSpot Data mode ─────────────────────────────────────────────────────────
@@ -364,14 +402,12 @@ async function loadHubspotRepStats() {
   populateRepFilters(true);
 
   const { dateFrom, dateTo } = getRepDateRange();
-  const ownerId = document.getElementById('repFilterRep').value;
-  const teamId  = document.getElementById('repFilterTeam').value;
+  const teamId = document.getElementById('repFilterTeam').value;
 
   try {
     const params = new URLSearchParams();
     if (dateFrom) params.set('dateFrom', dateFrom);
     if (dateTo)   params.set('dateTo',   dateTo);
-    if (ownerId)  params.set('ownerId',  ownerId);
     if (teamId)   params.set('teamId',   teamId);
 
     const data = await apiFetch(`/rep-tracker/hs-stats?${params}`);
@@ -379,13 +415,8 @@ async function loadHubspotRepStats() {
     // Store all leads for chart click-through
     window._repAllLeads = data.allLeads || [];
 
-    // Last sync timestamp
-    document.getElementById('lastSyncTime').textContent =
-      data.lastSync ? formatDateTime(data.lastSync) : 'Never synced';
-
     // Summary cards
     document.getElementById('repStatLeads').textContent    = data.total;
-    document.getElementById('repStatMQLs').textContent     = data.mqls;
     document.getElementById('repStatAvgScore').textContent = data.avgScore > 0 ? data.avgScore : '—';
     document.getElementById('repStatCore').textContent     = data.categoryCount['Core ICP']     || 0;
     document.getElementById('repStatStrong').textContent   = data.categoryCount['Strong ICP']   || 0;
@@ -398,125 +429,15 @@ async function loadHubspotRepStats() {
     renderRepCategoryChartHS(ownerBreakdown);
     renderWeeklyTrendChart(data.weeklyTrend, true);
     renderScoreDistChart(data.scoreRanges);
-    renderMqlByRepChart(ownerBreakdown);
     renderRepLeaderboard(ownerBreakdown, true);
     renderTeamBreakdownHS(ownerBreakdown);
     renderRepTopLeads(data.topLeads, true);
-
-    document.getElementById('repUploadsSection').classList.add('hidden');
-    document.getElementById('repSyncPanel').classList.remove('hidden');
 
   } catch (err) {
     showToast('Rep tracker (HubSpot) error: ' + err.message);
   }
 }
 
-// ── File Uploads mode ─────────────────────────────────────────────────────────
-
-async function loadUploadsRepStats() {
-  await loadRepsAndTeams();
-  populateRepFilters(false);
-
-  const { dateFrom, dateTo } = getRepDateRange();
-  const period = document.getElementById('repFilterPeriod').value;
-  const teamId = document.getElementById('repFilterTeam').value;
-  const repId  = document.getElementById('repFilterRep').value;
-
-  try {
-    const params = new URLSearchParams();
-    // Map new period values to what /rep-analytics expects
-    if (period === 'this_week')    params.set('period', 'week');
-    else if (period === 'this_month') params.set('period', 'month');
-    else if (dateFrom)             { params.set('from', dateFrom); if (dateTo) params.set('to', dateTo); }
-    if (teamId) params.set('teamId', teamId);
-    if (repId)  params.set('repId',  repId);
-
-    const data = await apiFetch(`/rep-analytics?${params}`);
-
-    document.getElementById('repStatLeads').textContent    = data.totalLeads;
-    document.getElementById('repStatMQLs').textContent     = '—';
-    document.getElementById('repStatAvgScore').textContent = '—';
-    document.getElementById('repStatCore').textContent     = data.categoryCount['Core ICP']     || 0;
-    document.getElementById('repStatStrong').textContent   = data.categoryCount['Strong ICP']   || 0;
-    document.getElementById('repStatModerate').textContent = data.categoryCount['Moderate ICP'] || 0;
-    document.getElementById('repStatNon').textContent      = data.categoryCount['Non ICP']      || 0;
-
-    renderRepCategoryChart(data.repBreakdown);
-    renderWeeklyTrendChart(data.weeklyTrend, false);
-    renderRepLeaderboard(data.repBreakdown, false);
-    renderTeamBreakdown(data.teamBreakdown, false);
-    renderRecentUploads(data.recentUploads);
-    renderRepTopLeads(data.highPriorityLeads, false);
-
-    document.getElementById('repUploadsSection').classList.remove('hidden');
-    document.getElementById('repSyncPanel').classList.add('hidden');
-
-  } catch (err) {
-    showToast('Rep tracker (uploads) error: ' + err.message);
-  }
-}
-
-// ── Sync & Re-score ───────────────────────────────────────────────────────────
-
-async function syncRepTrackerFromHubSpot() {
-  const btn       = document.getElementById('btnSyncHubspot');
-  const progress  = document.getElementById('syncProgress');
-  const msg       = document.getElementById('syncProgressMsg');
-
-  btn.disabled = true;
-  progress.classList.remove('hidden');
-  msg.textContent = 'Pulling contacts from HubSpot…';
-
-  try {
-    const dateFrom    = document.getElementById('syncDateFrom').value || undefined;
-    const dateTo      = document.getElementById('syncDateTo').value   || undefined;
-    const dateField   = document.getElementById('syncDateField').value;
-
-    msg.textContent = 'Scoring and storing…';
-
-    const data = await apiFetch('/rep-tracker/sync', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ dateFrom, dateTo, dateField })
-    });
-
-    progress.classList.add('hidden');
-    btn.disabled = false;
-
-    const summary = Object.entries(data.ownerSummary || {})
-      .map(([name, count]) => `${name}: ${count}`)
-      .join(', ');
-    showToast(`Synced ${data.contacts} contacts — ${data.added} new, ${data.updated} updated${summary ? ' · ' + summary : ''}`, 6000);
-
-    await loadHubspotRepStats();
-
-  } catch (err) {
-    progress.classList.add('hidden');
-    btn.disabled = false;
-    showToast('Sync failed: ' + err.message);
-  }
-}
-
-async function rescoreRepTrackerLeads() {
-  const btn = document.getElementById('btnRescoreAll');
-  btn.disabled = true;
-  btn.textContent = 'Re-scoring…';
-
-  try {
-    const data = await apiFetch('/rep-tracker/rescore', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({})
-    });
-    showToast(`Re-scored ${data.rescored} leads with current config`);
-    await loadHubspotRepStats();
-  } catch (err) {
-    showToast('Re-score failed: ' + err.message);
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="margin-right:5px;vertical-align:-2px"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>Re-score All Leads`;
-  }
-}
 
 // ── Chart renderers ───────────────────────────────────────────────────────────
 
@@ -674,40 +595,13 @@ function renderScoreDistChart(scoreRanges) {
   });
 }
 
-function renderMqlByRepChart(ownerBreakdown) {
-  const ctx = document.getElementById('chartMqlByRep');
-  if (!ctx) return;
-  if (chartMqlByRep) chartMqlByRep.destroy();
-  if (!ownerBreakdown || !ownerBreakdown.length) { chartMqlByRep = null; return; }
-  const labels = ownerBreakdown.map(o => o.ownerName || o.repName || '—');
-  chartMqlByRep = new Chart(ctx.getContext('2d'), {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [
-        { label: 'Total Leads', data: ownerBreakdown.map(o => o.totalLeads), backgroundColor: '#4f8ef7', borderRadius: 3 },
-        { label: 'MQLs',        data: ownerBreakdown.map(o => o.mqls || 0), backgroundColor: '#f97316', borderRadius: 3 }
-      ]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { position: 'bottom', labels: { color: '#8892aa', font: { size: 11 }, padding: 12, boxWidth: 10 } } },
-      scales: {
-        x: { ticks: { color: '#8892aa' }, grid: { display: false } },
-        y: { beginAtZero: true, ticks: { color: '#8892aa', precision: 0 }, grid: { color: '#2a2f47' } }
-      }
-    }
-  });
-}
-
 function renderRepLeaderboard(reps, isHubspot = false) {
   const tbody = document.getElementById('tbodyRepLeaderboard');
   if (!reps || !reps.length) {
-    tbody.innerHTML = `<tr><td colspan="13" class="empty">${isHubspot ? 'No data. Click "Sync from HubSpot" to pull contacts.' : 'No data yet. Upload files with a rep selected.'}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" class="empty">${isHubspot ? 'No data. Run a sync from the Dashboard.' : 'No data yet. Upload files with a rep selected.'}</td></tr>`;
     return;
   }
   tbody.innerHTML = reps.map((r) => {
-    const sr = r.scoreRanges || {};
     const name = isHubspot ? (r.ownerName || '—') : (r.repName || '—');
     return `<tr style="cursor:pointer" onclick="filterLeadsByOwner('${escHtml(name).replace(/'/g, "\\'")}')">
     <td>
@@ -716,16 +610,11 @@ function renderRepLeaderboard(reps, isHubspot = false) {
     </td>
     <td style="color:var(--muted);font-size:13px">${escHtml(isHubspot ? (r.ownerTeams || '—') : (r.teamName || '—'))}</td>
     <td><strong>${r.totalLeads}</strong></td>
-    <td>${isHubspot ? `<strong style="color:#f97316">${r.mqls || 0}</strong>` : '<span style="color:var(--muted)">—</span>'}</td>
     <td>${scoreBar(r.avgScore)}</td>
     <td><span style="color:var(--blue-light,#2d5ce6);font-weight:600;cursor:pointer" onclick="event.stopPropagation();filterLeadsByCategory('Core ICP')">${r.categories?.['Core ICP'] || 0}</span></td>
     <td><span style="color:var(--green);font-weight:600;cursor:pointer" onclick="event.stopPropagation();filterLeadsByCategory('Strong ICP')">${r.categories?.['Strong ICP'] || 0}</span></td>
     <td><span style="color:var(--yellow);font-weight:600;cursor:pointer" onclick="event.stopPropagation();filterLeadsByCategory('Moderate ICP')">${r.categories?.['Moderate ICP'] || 0}</span></td>
     <td><span style="color:var(--red);font-weight:600;cursor:pointer" onclick="event.stopPropagation();filterLeadsByCategory('Non ICP')">${r.categories?.['Non ICP'] || 0}</span></td>
-    <td style="font-size:12px;color:#2d5ce6">${sr.s80_100 || 0}</td>
-    <td style="font-size:12px;color:#65bc7b">${sr.s65_79 || 0}</td>
-    <td style="font-size:12px;color:#f59e0b">${sr.s50_64 || 0}</td>
-    <td style="font-size:12px;color:#ef4444">${sr.s0_49 || 0}</td>
   </tr>`;
   }).join('');
 }
@@ -737,12 +626,11 @@ function renderTeamBreakdownHS(ownerBreakdown) {
     const teams = o.ownerTeams ? o.ownerTeams.split(', ').filter(Boolean) : ['No Team'];
     teams.forEach(teamName => {
       if (!teamMap[teamName]) {
-        teamMap[teamName] = { teamName, repCount: 0, totalLeads: 0, mqls: 0, _tScore: 0, _tCount: 0, avgScore: 0, categories: {} };
+        teamMap[teamName] = { teamName, repCount: 0, totalLeads: 0, _tScore: 0, _tCount: 0, avgScore: 0, categories: {} };
       }
       const t = teamMap[teamName];
       t.repCount++;
       t.totalLeads += o.totalLeads;
-      t.mqls       += o.mqls || 0;
       t._tScore    += o.avgScore * o.totalLeads;
       t._tCount    += o.totalLeads;
       Object.entries(o.categories || {}).forEach(([cat, cnt]) => {
@@ -760,36 +648,17 @@ function renderTeamBreakdownHS(ownerBreakdown) {
 function renderTeamBreakdown(teams, isHubspot = false) {
   const tbody = document.getElementById('tbodyTeamBreakdown');
   if (!teams || !teams.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty">No teams data.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">No teams data.</td></tr>';
     return;
   }
   tbody.innerHTML = teams.map(t => `<tr>
     <td style="font-weight:500">${escHtml(t.teamName)}</td>
     <td>${t.repCount}</td>
     <td><strong>${t.totalLeads}</strong></td>
-    <td>${isHubspot ? `<strong style="color:#f97316">${t.mqls || 0}</strong>` : '<span style="color:#8892aa">—</span>'}</td>
     <td>${isHubspot ? scoreBar(t.avgScore) : '<span style="color:#8892aa">—</span>'}</td>
     <td><span style="color:#4f8ef7;font-weight:600">${t.categories?.['Core ICP'] || 0}</span></td>
     <td><span style="color:#22c55e;font-weight:600">${t.categories?.['Strong ICP'] || 0}</span></td>
     <td><span style="color:#ef4444;font-weight:600">${t.categories?.['Non ICP'] || 0}</span></td>
-  </tr>`).join('');
-}
-
-function renderRecentUploads(uploads) {
-  const tbody = document.getElementById('tbodyRecentUploads');
-  if (!uploads || !uploads.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty">No uploads yet.</td></tr>';
-    return;
-  }
-  tbody.innerHTML = uploads.map(u => `<tr>
-    <td style="color:#8892aa;font-size:12px">${formatDateTime(u.uploadedAt)}</td>
-    <td style="font-weight:500">${escHtml(u.repName)}</td>
-    <td style="color:#8892aa">${escHtml(u.teamName || '—')}</td>
-    <td style="color:#8892aa;font-size:12px">${escHtml(u.filename)}</td>
-    <td><strong>${u.leadCount}</strong></td>
-    <td>${u.stats?.['Core ICP'] || 0}</td>
-    <td>${u.stats?.['Strong ICP'] || 0}</td>
-    <td><button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" onclick="viewUploadDetail('${u.id}')">View</button></td>
   </tr>`).join('');
 }
 
@@ -937,8 +806,11 @@ let hsLeadSrcs  = [];   // [{label, value}]
 let hsMqlTypes  = [];   // [{label, value}]
 let selectedLeadSources = new Set();
 let ownerDatePreset = null;  // 'last_week' | 'last_month' | 'last_3months' | 'custom'
+let hubspotPullViewReady = false;
+let pdfViewReady = false;
 
 async function loadHubspotPullView() {
+  if (hubspotPullViewReady) return;  // already initialised — keep existing results
   await loadRepsAndTeams();
 
   // Populate internal rep selector
@@ -1000,6 +872,8 @@ async function loadHubspotPullView() {
   if (chkAll) chkAll.addEventListener('change', e => {
     document.querySelectorAll('.pull-row-chk').forEach(c => c.checked = e.target.checked);
   });
+
+  hubspotPullViewReady = true;
 }
 
 function populateOwnerDropdown() {
@@ -1305,13 +1179,25 @@ function renderContactsTable(contacts) {
   document.getElementById('contactsMeta').textContent = `Showing ${contacts.length} contacts`;
 }
 
+function getContactSegment(c) {
+  return (c.size_of_business && c.size_of_business.trim()) ? c.size_of_business.trim() : 'Others';
+}
+
 function filterContacts() {
-  const q   = document.getElementById('contactSearch').value.toLowerCase();
-  const cat = document.getElementById('filterCategory').value;
-  renderContactsTable(allContacts.filter(c =>
-    (!q   || (c.name||'').toLowerCase().includes(q) || (c.email||'').toLowerCase().includes(q)) &&
-    (!cat || c.category === cat)
-  ));
+  const q       = document.getElementById('contactSearch').value.toLowerCase();
+  const cat     = document.getElementById('filterCategory').value;
+  const seg     = document.getElementById('filterSegment').value;
+  const dateFrom = document.getElementById('filterDateFrom').value;
+  const dateTo   = document.getElementById('filterDateTo').value;
+
+  renderContactsTable(allContacts.filter(c => {
+    if (q && !(c.name||'').toLowerCase().includes(q) && !(c.email||'').toLowerCase().includes(q)) return false;
+    if (cat && c.category !== cat) return false;
+    if (seg && getContactSegment(c) !== seg) return false;
+    if (dateFrom && c.create_date && c.create_date < dateFrom) return false;
+    if (dateTo   && c.create_date && c.create_date > dateTo)   return false;
+    return true;
+  }));
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1466,12 +1352,23 @@ function renderEnrichBanner(enrichStats) {
 
 function downloadCSV() {
   if (!fileLeads.length) return;
-  const headers = ['Name','Email','Company','Job Title','Employees','Country','Industry','Tech Stack','Phone','Created Date','Score','Category','Priority'];
+  const headers = ['Name','Email','Company','Job Title','Employees','Country','Industry',
+    'Source Platform','Destination Platform','Size of Business','Phone','Created Date',
+    'Score','Category','Priority',
+    'Company Size Score','Company Size Reason','Geography Score','Geography Reason',
+    'Industry Score','Industry Reason','Migration Score','Migration Reason',
+    'Buyer Fit Score','Buyer Fit Reason'];
   const rows = fileLeads.map(l => [
     l.name || '', l.email || '', l.companyName || '', l.jobTitle || '',
     l.numberOfEmployees || '', l.country || '', l.industry || '',
-    l.techStack || '', l.phone || '', l.createdDate || '',
-    l.score ?? '', l.category || '', l.priority || ''
+    l.sourceCloud || '', l.destinationCloud || l.typeOfDestination || l.techStack || '',
+    l.sizeOfBusiness || '', l.phone || '', l.createdDate || '',
+    l.score ?? '', l.category || '', l.priority || '',
+    l.breakdown?.companySize ?? '', l.reasons?.companySize || '',
+    l.breakdown?.geography ?? '', l.reasons?.geography || '',
+    l.breakdown?.industry ?? '', l.reasons?.industry || '',
+    l.breakdown?.technology ?? '', l.reasons?.technology || '',
+    l.breakdown?.buyerFit ?? '', l.reasons?.buyerFit || ''
   ]);
   const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
@@ -1483,16 +1380,39 @@ function downloadCSV() {
   showToast('CSV downloaded');
 }
 
+async function downloadExcel() {
+  if (!fileLeads.length) { showToast('No data to export'); return; }
+  try {
+    showToast('Generating Excel file…');
+    const res = await fetch(`${API}/file/download-excel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ leads: fileLeads, filename: 'icp_scored_leads' })
+    });
+    if (!res.ok) throw new Error('Failed to generate Excel');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'icp_scored_leads.xlsx';
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Excel downloaded');
+  } catch (err) {
+    showToast('Excel download failed: ' + err.message);
+  }
+}
+
 function renderFileResults(data) {
   // Stats cards
   const statsEl = document.getElementById('pdfStatsCards');
   const enriched = data.enrichStats?.enriched || 0;
   const cats = [
-    { label:'Total Imported',   value: data.total,                        cls: 'card-blue'   },
-    { label:'Enriched (Apollo)', value: enriched,                          cls: 'card-purple' },
-    { label:'Core ICP',          value: data.stats['Core ICP']   || 0,    cls: 'card-green'  },
-    { label:'Strong ICP',        value: data.stats['Strong ICP'] || 0,    cls: 'card-yellow' },
-    { label:'Non ICP',           value: data.stats['Non ICP']    || 0,    cls: 'card-red'    }
+    { label:'Total Imported',    value: data.total,                          cls: 'card-blue'   },
+    { label:'Enriched (Apollo)', value: enriched,                            cls: 'card-indigo' },
+    { label:'Core ICP',          value: data.stats['Core ICP']     || 0,    cls: 'card-green'  },
+    { label:'Strong ICP',        value: data.stats['Strong ICP']   || 0,    cls: 'card-yellow' },
+    { label:'Moderate ICP',      value: data.stats['Moderate ICP'] || 0,    cls: 'card-purple' },
+    { label:'Non ICP',           value: data.stats['Non ICP']      || 0,    cls: 'card-red'    }
   ];
   statsEl.innerHTML = cats.map(c => `
     <div class="card ${c.cls}">
@@ -1547,9 +1467,9 @@ function renderAdminTab(tab) {
   switch (tab) {
     case 'companySize': el.innerHTML = renderCompanySize();     break;
     case 'geography':   el.innerHTML = renderGeoAdmin();        break;
-    case 'industry':    el.innerHTML = renderKeywordsAdmin('industry',   'Industry',    { tier1:'Software / IT', tier2:'Finance / Health', tier3:'Education', other:'Other' });   break;
-    case 'technology':  el.innerHTML = renderKeywordsAdmin('technology', 'Technology',  { tier1:'M365 / Google WS', tier2:'Dropbox / Slack…', tier3:'Other cloud', none:'None / Unsupported' }); break;
-    case 'buyerFit':    el.innerHTML = renderKeywordsAdmin('buyerFit',   'Buyer Fit',   { tier1:'CIO / CTO / CEO', tier2:'IT Manager / Admin', tier3:'Consultant', other:'Non-IT' });  break;
+    case 'industry':    el.innerHTML = renderKeywordsAdmin('industry',   'Industry',    { tier1:'IT / Software (10pts)', tier2:'Finance / Health (8pts)', tier3:'Education (6pts)', other:'Other Detected (4pts)', none:'Not Detected (0pts)' });   break;
+    case 'technology':  el.innerHTML = renderKeywordsAdmin('technology', 'Migration Platform',  { tier1:'Google / Microsoft (10pts)', tier2:'Dropbox / Box / Egnyte… (8pts)', tier3:'Not Provided (5pts)', none:'Both Unsupported (0pts)' }); break;
+    case 'buyerFit':    el.innerHTML = renderKeywordsAdmin('buyerFit',   'Buyer Fit',   { tier1:'C-Level / IT Leadership (10pts)', tier2:'IT Manager / Admin (7pts)', tier3:'Consultant / Freelance (5pts)', other:'Non-IT Role (5pts)', none:'No Title (0pts)' });  break;
     case 'categories':  el.innerHTML = renderCategories();      break;
   }
 }
@@ -1805,18 +1725,20 @@ document.addEventListener('DOMContentLoaded', () => {
   // Contacts
   document.getElementById('contactSearch').addEventListener('input', filterContacts);
   document.getElementById('filterCategory').addEventListener('change', filterContacts);
+  document.getElementById('filterSegment').addEventListener('change', filterContacts);
 
   // File Upload
   initFileUpload();
   document.getElementById('btnDownloadCSV').addEventListener('click', downloadCSV);
+  const btnExcel = document.getElementById('btnDownloadExcel');
+  if (btnExcel) btnExcel.addEventListener('click', downloadExcel);
 
   // HubSpot Pull
   document.getElementById('btnPullAndScore').addEventListener('click', pullAndScore);
 
   // Rep Tracker filters
-  document.getElementById('repFilterPeriod').addEventListener('change', loadRepTracker);
+  // Note: repFilterPeriod uses onchange="onRepPeriodChange()" in HTML — no duplicate listener here
   document.getElementById('repFilterTeam').addEventListener('change', loadRepTracker);
-  document.getElementById('repFilterRep').addEventListener('change', loadRepTracker);
   document.getElementById('btnManageReps').addEventListener('click', openRepModal);
 
   // Modal
@@ -1935,17 +1857,18 @@ function showLeadDetail(lead) {
   else if (score >= 65) scoreColor = '#65bc7b';
   else if (score >= 50) scoreColor = '#f59e0b';
 
+  const reasons = lead.reasons || {};
   const dims = [
     { key: 'companySize', label: 'Company Size', max: 35, color: '#2d5ce6',
-      reason: lead.numberOfEmployees ? lead.numberOfEmployees + ' employees' : (lead.company || lead.companyName || '—') },
+      reason: reasons.companySize || (lead.numberOfEmployees ? lead.numberOfEmployees + ' employees' : '—') },
     { key: 'geography', label: 'Geography', max: 35, color: '#14cfc3',
-      reason: lead.country || '—' },
+      reason: reasons.geography || lead.country || '—' },
     { key: 'industry', label: 'Industry', max: 10, color: '#6239bd',
-      reason: lead.industry || '—' },
-    { key: 'technology', label: 'Destination Cloud', max: 10, color: '#65bc7b',
-      reason: lead.destinationCloud || lead.typeOfDestination || lead.techStack || '—' },
+      reason: reasons.industry || lead.industry || '—' },
+    { key: 'technology', label: 'Migration Platform', max: 10, color: '#65bc7b',
+      reason: reasons.technology || [lead.sourceCloud, lead.destinationCloud || lead.typeOfDestination || lead.techStack].filter(Boolean).join(' → ') || '—' },
     { key: 'buyerFit', label: 'Buyer Fit', max: 10, color: '#f59e0b',
-      reason: lead.jobTitle || '—' }
+      reason: reasons.buyerFit || lead.jobTitle || '—' }
   ];
 
   const body = document.getElementById('leadDetailBody');

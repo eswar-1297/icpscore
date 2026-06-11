@@ -1,17 +1,26 @@
 'use strict';
 
 const XLSX = require('xlsx');
+const { parseEmployeeCount } = require('./scoring');
 
 // ── Column name aliases → standard lead field mapping ────────────────────────
 const FIELD_ALIASES = {
   name:              ['name', 'full name', 'fullname', 'contact name', 'contact', 'lead name', 'person name', 'contact person'],
   email:             ['email', 'email address', 'e-mail', 'emailaddress', 'mail', 'email id', 'emailid', 'person email', 'contact email', 'work email', 'business email', 'corporate email', 'primary email'],
+  firstName:         ['first name', 'firstname', 'fname', 'given name'],
+  lastName:          ['last name', 'lastname', 'lname', 'surname', 'family name'],
   jobTitle:          ['job title', 'jobtitle', 'title', 'role', 'position', 'designation', 'job role', 'person title', 'contact title'],
   companyName:       ['company', 'company name', 'companyname', 'organisation', 'organization', 'org', 'account', 'account name', 'firm', 'business name', 'employer', 'company  name'],
-  numberOfEmployees: ['employees', 'number of employees', 'numberofemployees', 'employee count', 'company size', 'headcount', 'num employees', 'no of employees', 'employee size', 'team size', 'staff count', 'of employees'],
-  country:           ['country', 'location', 'region', 'geography', 'geo', 'nation', 'person country', 'company country', 'hq country'],
+  numberOfEmployees: ['employee count', 'employees', 'number of employees', 'numberofemployees', 'company size', 'headcount', 'num employees', 'no of employees', 'employee size', 'team size', 'staff count', 'of employees', 'size'],
+  country:           ['country', 'countryregion', 'country region', 'geography', 'location', 'region', 'geo', 'nation', 'person country', 'company country', 'hq country'],
+  selectCountry:     ['select country', 'selected country'],
   industry:          ['industry', 'sector', 'vertical', 'business type', 'company industry'],
+  sourceCloud:       ['source', 'sourcecloud', 'source cloud', 'source platform', 'migration source', 'current platform', 'from'],
+  sourceDestination: ['source destination', 'sourcedestination'],
+  destinationCloud:  ['destination', 'destinationcloud', 'destination cloud', 'destination platform', 'target', 'dest'],
+  typeOfDestination: ['type of destination', 'typeofdestination', 'type of destination cloud'],
   techStack:         ['tech stack', 'techstack', 'technology', 'technologies', 'tools', 'software', 'tech'],
+  sizeOfBusiness:    ['size of business', 'sob', 'business size', 'segment', 'account type'],
   phone:             ['phone', 'phone number', 'phonenumber', 'telephone', 'tel', 'mobile', 'cell', 'direct phone', 'work phone', 'contact number', 'mobile number', 'phone no'],
   leadStatus:        ['lead status', 'leadstatus', 'status', 'stage'],
   linkedinUrl:       ['linkedin', 'linkedin url', 'linkedin profile', 'person linkedin url', 'linkedin link'],
@@ -21,7 +30,7 @@ const FIELD_ALIASES = {
 
 /**
  * Normalise a header string for matching.
- * Collapses whitespace, strips non-alphanumeric, lowercases.
+ * Collapses whitespace, strips non-alphanumeric (except spaces), lowercases.
  */
 function norm(s) {
   return (s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
@@ -30,16 +39,14 @@ function norm(s) {
 /**
  * Check if a header matches a field by:
  * 1. Exact alias match
- * 2. Header contains an alias as substring (e.g. "Person Email Address" matches "email address")
- * 3. Alias contains the header as substring (e.g. header "email" matches alias "email address")
+ * 2. Header contains an alias as substring
+ * 3. Alias contains the header as substring (min 5 chars)
  */
 function findFieldMatch(headerNorm) {
-  // Pass 1: exact match
   for (const [field, aliases] of Object.entries(FIELD_ALIASES)) {
     if (aliases.includes(headerNorm)) return field;
   }
 
-  // Pass 2: header contains alias OR alias contains header (min 3 chars to avoid false positives)
   if (headerNorm.length >= 3) {
     for (const [field, aliases] of Object.entries(FIELD_ALIASES)) {
       for (const alias of aliases) {
@@ -50,7 +57,6 @@ function findFieldMatch(headerNorm) {
     }
   }
 
-  // Pass 3: detect email columns by checking if header has 'email' or 'mail' anywhere
   if (headerNorm.includes('email') || headerNorm.includes('mail')) return 'email';
   if (headerNorm.includes('phone') || headerNorm.includes('mobile')) return 'phone';
   if (headerNorm.includes('company') || headerNorm.includes('organization')) return 'companyName';
@@ -69,7 +75,7 @@ function findFieldMatch(headerNorm) {
  */
 function buildColumnMap(headers) {
   const map = {};
-  const usedFields = new Set(); // avoid mapping two columns to the same field
+  const usedFields = new Set();
 
   for (const header of headers) {
     const h = norm(header);
@@ -87,46 +93,36 @@ function buildColumnMap(headers) {
 }
 
 /**
- * If there's no 'name' column but there are 'first name' + 'last name', merge them.
+ * If there's no 'name' column but there are first/last name columns, merge them.
  */
 function handleNameColumns(headers, rows) {
   const hn = headers.map(norm);
-  const firstIdx = hn.findIndex(h => ['first name', 'firstname', 'first'].includes(h));
-  const lastIdx  = hn.findIndex(h => ['last name', 'lastname', 'last', 'surname'].includes(h));
+  const firstIdx = hn.findIndex(h => ['first name', 'firstname', 'first', 'fname', 'given name'].includes(h));
+  const lastIdx  = hn.findIndex(h => ['last name', 'lastname', 'last', 'surname', 'family name', 'lname'].includes(h));
 
   if (firstIdx === -1 && lastIdx === -1) return;
 
-  // Only merge if there's no explicit "name" column already
   const nameIdx = hn.findIndex(h => FIELD_ALIASES.name.includes(h));
   if (nameIdx !== -1) return;
 
-  // Add a synthetic "name" header
   headers.push('name');
   for (const row of rows) {
-    const first = (row[headers[firstIdx]] || '').trim();
-    const last  = (row[headers[lastIdx]]  || '').trim();
+    const first = (row[headers[firstIdx]] || '').toString().trim();
+    const last  = (row[headers[lastIdx]]  || '').toString().trim();
     row['name'] = `${first} ${last}`.trim();
   }
 }
 
 /**
  * Parse a CSV / XLS / XLSX buffer and return an array of lead objects.
- *
- * @param {Buffer} buffer   – file contents
- * @param {string} filename – original file name (used to detect format)
- * @returns {Array<Object>}
  */
 function parseLeadsFile(buffer, filename = 'file.csv') {
-  const ext = (filename.split('.').pop() || '').toLowerCase();
-
-  // Read workbook from buffer
   const workbook = XLSX.read(buffer, {
     type: 'buffer',
     cellDates: true,
-    codepage: 65001  // UTF-8
+    codepage: 65001
   });
 
-  // Use the first sheet
   const sheetName = workbook.SheetNames[0];
   if (!sheetName) throw new Error('The file contains no sheets.');
 
@@ -137,13 +133,10 @@ function parseLeadsFile(buffer, filename = 'file.csv') {
 
   const headers = Object.keys(rawRows[0]);
 
-  // Handle first/last name merge
   handleNameColumns(headers, rawRows);
 
-  // Build column mapping
   const colMap = buildColumnMap(headers);
 
-  // Check that at least email or name is mapped
   const mappedFields = new Set(Object.values(colMap));
   if (!mappedFields.has('email') && !mappedFields.has('name')) {
     throw new Error(
@@ -153,38 +146,61 @@ function parseLeadsFile(buffer, filename = 'file.csv') {
     );
   }
 
-  // Convert rows to standard lead objects
-  const leads = rawRows.map(row => {
-    const lead = {};
+  const leads = rawRows.map((row, rowIdx) => {
+    const lead = { _rowIndex: rowIdx + 2 };
     for (const [colHeader, fieldName] of Object.entries(colMap)) {
       let val = row[colHeader];
       if (val === undefined || val === null) val = '';
-      val = String(val).trim();
 
-      // numberOfEmployees → parse as integer
       if (fieldName === 'numberOfEmployees') {
-        const n = parseInt(val.replace(/,/g, ''), 10);
-        lead[fieldName] = isNaN(n) ? null : n;
+        lead[fieldName] = parseEmployeeCount(val);
       } else if (fieldName === 'createdDate') {
-        // Try to parse date; XLSX may give us a Date object or string
         let rawVal = row[colHeader];
         if (rawVal instanceof Date && !isNaN(rawVal)) {
           lead[fieldName] = rawVal.toISOString().split('T')[0];
-        } else if (val) {
-          // Attempt common date formats
-          const d = new Date(val);
-          lead[fieldName] = (!isNaN(d)) ? d.toISOString().split('T')[0] : val;
         } else {
-          lead[fieldName] = null;
+          val = String(val).trim();
+          if (val) {
+            const d = new Date(val);
+            lead[fieldName] = (!isNaN(d)) ? d.toISOString().split('T')[0] : val;
+          } else {
+            lead[fieldName] = null;
+          }
         }
       } else {
+        val = String(val).trim();
         lead[fieldName] = val || null;
       }
     }
+
+    // Country: selectCountry takes priority over country (matches HubSpot behavior)
+    if (lead.selectCountry) {
+      lead.country = lead.selectCountry;
+    }
+    delete lead.selectCountry;
+
+    // Source cloud fallback: sourceCloud || sourceDestination (matches HubSpot fallback)
+    if (!lead.sourceCloud && lead.sourceDestination) {
+      lead.sourceCloud = lead.sourceDestination;
+    }
+    delete lead.sourceDestination;
+
+    // Destination cloud fallback: destinationCloud || typeOfDestination (matches HubSpot fallback)
+    if (!lead.destinationCloud && lead.typeOfDestination) {
+      lead.destinationCloud = lead.typeOfDestination;
+    }
+    delete lead.typeOfDestination;
+
+    // Merge firstName + lastName into name if we have them
+    if (!lead.name && (lead.firstName || lead.lastName)) {
+      lead.name = `${lead.firstName || ''} ${lead.lastName || ''}`.trim();
+    }
+    delete lead.firstName;
+    delete lead.lastName;
+
     return lead;
   });
 
-  // Filter out rows that are completely empty
   const validLeads = leads.filter(l =>
     l.email || l.name || l.companyName || l.jobTitle
   );
