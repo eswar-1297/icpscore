@@ -191,10 +191,10 @@ function parseLeadsFile(buffer, filename = 'file.csv') {
     }
     delete lead.typeOfDestination;
 
-    // Merge firstName + lastName into name if we have them
-    if (!lead.name && (lead.firstName || lead.lastName)) {
-      lead.name = `${lead.firstName || ''} ${lead.lastName || ''}`.trim();
-    }
+    // Prefer the contact's First + Last name (the client) over any generic
+    // "name" column, which often holds the sales rep / lead-owner name.
+    const fullName = `${lead.firstName || ''} ${lead.lastName || ''}`.trim();
+    if (fullName) lead.name = fullName;
     delete lead.firstName;
     delete lead.lastName;
 

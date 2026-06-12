@@ -11,10 +11,8 @@ let chartWeekly   = null;
 let chartScoreDist = null;
 let allContacts   = [];
 let fileLeads     = [];       // results from last file analysis
-let adminConfig   = null;     // current scoring config in Admin Panel
-let activeAdminTab = 'companySize';
 
-const PALETTE = ['#2d5ce6','#65bc7b','#f59e0b','#ef4444','#6239bd','#14cfc3','#f97316','#84cc16'];
+const PALETTE = ['#0129AC','#0ED380','#E8A400','#FF1F1F','#A100FF','#14cfc3','#FE5833','#3FD6F1'];
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  Utilities
@@ -54,8 +52,8 @@ function priorityBadge(p) {
 function scoreBar(score) {
   if (score == null) return '—';
   const pct  = Math.min(100, Math.max(0, score));
-  let col    = '#ef4444';
-  if (pct >= 80) col = '#4f8ef7'; else if (pct >= 65) col = '#22c55e'; else if (pct >= 50) col = '#f59e0b';
+  let col    = '#FF1F1F';
+  if (pct >= 80) col = '#0129AC'; else if (pct >= 65) col = '#0ED380'; else if (pct >= 50) col = '#E8A400';
   return `<div class="score-bar-wrap">
     <div class="score-bar-track"><div class="score-bar-fill" style="width:${pct}%;background:${col}"></div></div>
     <span class="score-bar-val" style="color:${col}">${score}</span>
@@ -64,7 +62,11 @@ function scoreBar(score) {
 
 function formatDate(iso) {
   if (!iso) return '—';
-  const d = new Date(iso);
+  // Date-only strings (YYYY-MM-DD) parse as UTC midnight and can render as the
+  // previous day in negative-offset timezones — parse them as local instead.
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso).trim());
+  const d = m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(iso);
+  if (isNaN(d)) return '—';
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
@@ -86,17 +88,17 @@ function switchView(view) {
 
   const titles = {
     dashboard:'Dashboard', 'rep-tracker':'Rep Tracker', 'hubspot-pull':'HubSpot Pull',
-    pdf:'File Upload', contacts:'Contacts', score:'Run Scoring', admin:'Admin Panel', setup:'Setup'
+    pdf:'File Upload', contacts:'Contacts', combinations:'Combinations'
   };
   document.getElementById('pageTitle').textContent = titles[view] || 'ICP Score';
 
 
   if (view === 'dashboard')      loadDashboard();
   if (view === 'contacts')       loadContacts();
-  if (view === 'admin')          loadAdminConfig();
   if (view === 'rep-tracker')    loadRepTracker();
   if (view === 'hubspot-pull')   loadHubspotPullView();
   if (view === 'pdf')            loadRepSelectorsForUpload();
+  if (view === 'combinations')   loadCombinations();
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -105,6 +107,7 @@ function switchView(view) {
 
 async function checkConnection() {
   const el = document.getElementById('connectionStatus');
+  if (!el) return;  // status indicator removed from the UI
   try {
     await apiFetch('/status');
     el.className = 'connection-status ok';
@@ -154,15 +157,29 @@ async function syncHubspot() {
   const indicator = document.getElementById('syncIndicator');
   const btn = document.getElementById('btnSyncHubspot');
 
+  const dateFrom = document.getElementById('syncDateFrom')?.value || undefined;
+  const dateTo   = document.getElementById('syncDateTo')?.value   || undefined;
+  if (dateFrom && dateTo && dateFrom > dateTo) {
+    showToast('"From" date must be on or before the "To" date');
+    return;
+  }
+
   banner.className = 'sync-banner';
   banner.classList.remove('hidden');
-  document.getElementById('syncBannerMsg').textContent = 'Syncing contacts from HubSpot… this may take a minute';
+  const rangeMsg = (dateFrom || dateTo)
+    ? ` (${dateFrom || 'start'} → ${dateTo || 'now'})`
+    : '';
+  document.getElementById('syncBannerMsg').textContent = `Syncing contacts from HubSpot${rangeMsg}… this may take a minute`;
   indicator.className = 'sync-indicator syncing';
   document.getElementById('syncText').textContent = 'Syncing…';
   btn.disabled = true;
 
   try {
-    const data = await apiFetch('/sync/full', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const data = await apiFetch('/sync/full', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dateFrom, dateTo })
+    });
     banner.className = 'sync-banner success';
     document.getElementById('syncBannerMsg').textContent =
       `Synced ${data.contacts} contacts, ${data.owners} owners`;
@@ -214,8 +231,6 @@ function renderSegmentCards(segs) {
     return;
   }
   const ORDER = ['SMB', 'MSP', 'Large MSP', 'Enterprise', 'Others'];
-  const COLORS = { SMB: '#3b82f6', MSP: '#22c55e', 'Large MSP': '#f59e0b', Enterprise: '#8b5cf6', Others: '#6b7280' };
-  const DEFAULT_COLOR = '#06b6d4';
   // Sort: known order first, then alphabetically
   const keys = Object.keys(segs).sort((a, b) => {
     const ai = ORDER.indexOf(a), bi = ORDER.indexOf(b);
@@ -226,9 +241,8 @@ function renderSegmentCards(segs) {
   });
   container.innerHTML = keys.map(seg => {
     const s = segs[seg];
-    const color = COLORS[seg] || DEFAULT_COLOR;
     return `
-      <div class="segment-card" style="border-top-color:${color}">
+      <div class="segment-card">
         <div class="seg-title">${seg}</div>
         <div class="seg-total">${s.total}</div>
         <div class="seg-breakdown">
@@ -244,14 +258,14 @@ function renderSegmentCards(segs) {
 function renderCategoryChart(counts) {
   const labels  = ['Core ICP','Strong ICP','Moderate ICP','Non ICP'];
   const values  = labels.map(l => counts[l] || 0);
-  const colours = ['#2d5ce6','#65bc7b','#f59e0b','#ef4444'];
+  const colours = ['#0129AC','#0ED380','#E8A400','#FF1F1F'];
   const ctx     = document.getElementById('chartCategory').getContext('2d');
   if (chartCategory) chartCategory.destroy();
   chartCategory = new Chart(ctx, {
     type: 'doughnut',
     data: { labels, datasets: [{ data: values, backgroundColor: colours, borderWidth: 0, hoverOffset: 6 }] },
     options: { responsive: true, maintainAspectRatio: false, plugins: {
-      legend: { position: 'bottom', labels: { color:'#8892aa', font:{ size:12 }, padding:16, boxWidth:12 } },
+      legend: { position: 'bottom', labels: { color:'#707070', font:{ size:12 }, padding:16, boxWidth:12 } },
       tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed}` } }
     }, cutout: '68%' }
   });
@@ -265,7 +279,7 @@ function renderGeoChart(counts) {
     type: 'bar',
     data: { labels: sorted.map(([k])=>k||'Unknown'), datasets: [{ label:'Contacts', data: sorted.map(([,v])=>v), backgroundColor: PALETTE, borderRadius:5, borderSkipped:false }] },
     options: { responsive: true, maintainAspectRatio: false, indexAxis:'y', plugins: { legend:{ display:false } },
-      scales: { x:{ ticks:{color:'#8892aa'}, grid:{color:'#2a2f47'} }, y:{ ticks:{color:'#8892aa'}, grid:{display:false} } } }
+      scales: { x:{ ticks:{color:'#707070'}, grid:{color:'#E6E8EE'} }, y:{ ticks:{color:'#707070'}, grid:{display:false} } } }
   });
 }
 
@@ -293,12 +307,16 @@ function filterPriorityLeads() {
   renderPriorityTable(filtered);
 }
 
+let priorityRendered = [];
+
 function renderPriorityTable(leads) {
   const tbody = document.getElementById('tbodyPriority');
-  if (!leads.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty">No high-priority leads for this segment.</td></tr>'; return; }
-  tbody.innerHTML = leads.map(l => `<tr>
-    <td><div style="font-weight:500">${escHtml(l.name)}</div><div style="font-size:12px;color:#8892aa">${escHtml(l.email||'')}</div></td>
+  if (!leads.length) { tbody.innerHTML = '<tr><td colspan="11" class="empty">No high-priority leads for this segment.</td></tr>'; return; }
+  priorityRendered = leads;
+  tbody.innerHTML = leads.map((l, i) => `<tr style="cursor:pointer" onclick="showLeadDetail(priorityRendered[${i}])">
+    <td><div style="font-weight:500;color:var(--blue-light,#0129AC)">${escHtml(l.name)}</div><div style="font-size:12px;color:#707070">${escHtml(l.email||'')}</div></td>
     <td style="font-size:12.5px;color:var(--muted)">${escHtml(l.segment||'—')}</td>
+    ${scoringInputCells(l)}
     <td>${scoreBar(l.score)}</td>
     <td>${categoryBadge(l.category)}</td>
     <td>${priorityBadge(l.priority)}</td>
@@ -371,18 +389,31 @@ function populateRepFilters(useHubspot = false) {
 }
 
 async function loadRepSelectorsForUpload() {
-  if (pdfViewReady) return;  // already initialised — keep existing results
-  await loadRepsAndTeams();
-  const sel     = document.getElementById('uploadRepSelect');
-  const current = sel.value;
-  sel.innerHTML = '<option value="">— No Rep (skip tracking) —</option>' +
-    allReps.map(r => `<option value="${r.id}">${escHtml(r.name)}${r.teamName ? ' ('+escHtml(r.teamName)+')' : ''}</option>`).join('');
-  sel.value = current;
+  // Rep assignment removed from File Upload — nothing to populate.
   pdfViewReady = true;
 }
 
 async function loadRepTracker() {
   await loadHubspotRepStats();
+}
+
+/** Re-populate the "Assign to Rep" selectors after reps change in the modal,
+ *  so newly added/removed reps appear without a page reload. */
+function refreshRepSelectors() {
+  const pullSel = document.getElementById('pullRepSelect');
+  if (pullSel) {
+    const cur = pullSel.value;
+    pullSel.innerHTML = '<option value="">— No Rep —</option>' +
+      allReps.map(r => `<option value="${r.id}">${escHtml(r.name)}</option>`).join('');
+    pullSel.value = cur;
+  }
+  const uploadSel = document.getElementById('uploadRepSelect');
+  if (uploadSel) {
+    const cur = uploadSel.value;
+    uploadSel.innerHTML = '<option value="">— No Rep (skip tracking) —</option>' +
+      allReps.map(r => `<option value="${r.id}">${escHtml(r.name)}${r.teamName ? ' ('+escHtml(r.teamName)+')' : ''}</option>`).join('');
+    uploadSel.value = cur;
+  }
 }
 
 // ── HubSpot Data mode ─────────────────────────────────────────────────────────
@@ -448,7 +479,7 @@ function renderRepCategoryChartHS(ownerBreakdown) {
 
   const labels   = ownerBreakdown.map(o => o.ownerName);
   const cats     = ['Core ICP', 'Strong ICP', 'Moderate ICP', 'Non ICP'];
-  const colors   = ['#2d5ce6', '#65bc7b', '#f59e0b', '#ef4444'];
+  const colors   = ['#0129AC', '#0ED380', '#E8A400', '#FF1F1F'];
   const datasets = cats.map((cat, i) => ({
     label: cat,
     data:  ownerBreakdown.map(o => o.categories[cat] || 0),
@@ -470,40 +501,10 @@ function renderRepCategoryChartHS(ownerBreakdown) {
         const leads = (window._repAllLeads || []).filter(l => l.ownerName === ownerName && l.category === catName);
         showLeadPopup(`${ownerName} — ${catName}`, leads);
       },
-      plugins: { legend: { position: 'bottom', labels: { color: '#7b8ba8', font: { size: 11 }, padding: 12, boxWidth: 10 } } },
+      plugins: { legend: { position: 'bottom', labels: { color: '#707070', font: { size: 11 }, padding: 12, boxWidth: 10 } } },
       scales: {
-        x: { stacked: true, ticks: { color: '#7b8ba8' }, grid: { display: false } },
-        y: { stacked: true, ticks: { color: '#7b8ba8' }, grid: { color: '#1e2744' } }
-      }
-    }
-  });
-}
-
-function renderRepCategoryChart(repBreakdown) {
-  const ctx = document.getElementById('chartRepCategory').getContext('2d');
-  if (chartRepCat) chartRepCat.destroy();
-  if (!repBreakdown.length) { chartRepCat = null; return; }
-
-  const labels   = repBreakdown.map(r => r.repName);
-  const cats     = ['Core ICP', 'Strong ICP', 'Moderate ICP', 'Non ICP'];
-  const colors   = ['#4f8ef7', '#22c55e', '#f59e0b', '#ef4444'];
-  const datasets = cats.map((cat, i) => ({
-    label: cat,
-    data:  repBreakdown.map(r => r.categories[cat] || 0),
-    backgroundColor: colors[i],
-    borderRadius: 3,
-    borderSkipped: false
-  }));
-
-  chartRepCat = new Chart(ctx, {
-    type: 'bar',
-    data: { labels, datasets },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { position: 'bottom', labels: { color: '#8892aa', font: { size: 11 }, padding: 12, boxWidth: 10 } } },
-      scales: {
-        x: { stacked: true, ticks: { color: '#8892aa' }, grid: { display: false } },
-        y: { stacked: true, ticks: { color: '#8892aa' }, grid: { color: '#2a2f47' } }
+        x: { stacked: true, ticks: { color: '#707070' }, grid: { display: false } },
+        y: { stacked: true, ticks: { color: '#707070' }, grid: { color: '#E6E8EE' } }
       }
     }
   });
@@ -518,18 +519,18 @@ function renderWeeklyTrendChart(trend, isHubspot = false) {
     {
       label: 'Total Leads',
       data: trend.map(w => w.leads),
-      borderColor: '#4f8ef7',
+      borderColor: '#0129AC',
       backgroundColor: 'rgba(79,142,247,.1)',
       fill: true, tension: 0.3,
-      pointRadius: 4, pointBackgroundColor: '#4f8ef7'
+      pointRadius: 4, pointBackgroundColor: '#0129AC'
     },
     {
       label: 'Core ICP',
       data: trend.map(w => w.coreICP),
-      borderColor: '#22c55e',
+      borderColor: '#0ED380',
       backgroundColor: 'rgba(34,197,94,.1)',
       fill: false, tension: 0.3,
-      pointRadius: 3, pointBackgroundColor: '#22c55e'
+      pointRadius: 3, pointBackgroundColor: '#0ED380'
     }
   ];
 
@@ -537,10 +538,10 @@ function renderWeeklyTrendChart(trend, isHubspot = false) {
     datasets.push({
       label: 'MQLs',
       data: trend.map(w => w.mqls || 0),
-      borderColor: '#f97316',
+      borderColor: '#FE5833',
       backgroundColor: 'rgba(249,115,22,.05)',
       fill: false, tension: 0.3,
-      pointRadius: 3, pointBackgroundColor: '#f97316',
+      pointRadius: 3, pointBackgroundColor: '#FE5833',
       borderDash: [5, 3]
     });
   }
@@ -550,10 +551,10 @@ function renderWeeklyTrendChart(trend, isHubspot = false) {
     data: { labels: trend.map(w => w.weekStart), datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { position: 'bottom', labels: { color: '#8892aa', font: { size: 11 }, padding: 12, boxWidth: 10 } } },
+      plugins: { legend: { position: 'bottom', labels: { color: '#707070', font: { size: 11 }, padding: 12, boxWidth: 10 } } },
       scales: {
-        x: { ticks: { color: '#8892aa' }, grid: { color: '#2a2f47' } },
-        y: { beginAtZero: true, ticks: { color: '#8892aa' }, grid: { color: '#2a2f47' } }
+        x: { ticks: { color: '#707070' }, grid: { color: '#E6E8EE' } },
+        y: { beginAtZero: true, ticks: { color: '#707070' }, grid: { color: '#E6E8EE' } }
       }
     }
   });
@@ -574,7 +575,7 @@ function renderScoreDistChart(scoreRanges) {
       datasets: [{
         label: 'Leads',
         data: [sr.s80_100 || 0, sr.s65_79 || 0, sr.s50_64 || 0, sr.s0_49 || 0],
-        backgroundColor: ['#2d5ce6', '#65bc7b', '#f59e0b', '#ef4444'],
+        backgroundColor: ['#0129AC', '#0ED380', '#E8A400', '#FF1F1F'],
         borderRadius: 5,
         borderSkipped: false
       }]
@@ -588,8 +589,8 @@ function renderScoreDistChart(scoreRanges) {
       },
       plugins: { legend: { display: false } },
       scales: {
-        x: { ticks: { color: '#7b8ba8' }, grid: { display: false } },
-        y: { beginAtZero: true, ticks: { color: '#7b8ba8', precision: 0 }, grid: { color: '#1e2744' } }
+        x: { ticks: { color: '#707070' }, grid: { display: false } },
+        y: { beginAtZero: true, ticks: { color: '#707070', precision: 0 }, grid: { color: '#E6E8EE' } }
       }
     }
   });
@@ -611,7 +612,7 @@ function renderRepLeaderboard(reps, isHubspot = false) {
     <td style="color:var(--muted);font-size:13px">${escHtml(isHubspot ? (r.ownerTeams || '—') : (r.teamName || '—'))}</td>
     <td><strong>${r.totalLeads}</strong></td>
     <td>${scoreBar(r.avgScore)}</td>
-    <td><span style="color:var(--blue-light,#2d5ce6);font-weight:600;cursor:pointer" onclick="event.stopPropagation();filterLeadsByCategory('Core ICP')">${r.categories?.['Core ICP'] || 0}</span></td>
+    <td><span style="color:var(--blue-light,#0129AC);font-weight:600;cursor:pointer" onclick="event.stopPropagation();filterLeadsByCategory('Core ICP')">${r.categories?.['Core ICP'] || 0}</span></td>
     <td><span style="color:var(--green);font-weight:600;cursor:pointer" onclick="event.stopPropagation();filterLeadsByCategory('Strong ICP')">${r.categories?.['Strong ICP'] || 0}</span></td>
     <td><span style="color:var(--yellow);font-weight:600;cursor:pointer" onclick="event.stopPropagation();filterLeadsByCategory('Moderate ICP')">${r.categories?.['Moderate ICP'] || 0}</span></td>
     <td><span style="color:var(--red);font-weight:600;cursor:pointer" onclick="event.stopPropagation();filterLeadsByCategory('Non ICP')">${r.categories?.['Non ICP'] || 0}</span></td>
@@ -648,17 +649,18 @@ function renderTeamBreakdownHS(ownerBreakdown) {
 function renderTeamBreakdown(teams, isHubspot = false) {
   const tbody = document.getElementById('tbodyTeamBreakdown');
   if (!teams || !teams.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty">No teams data.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">No teams data.</td></tr>';
     return;
   }
   tbody.innerHTML = teams.map(t => `<tr>
     <td style="font-weight:500">${escHtml(t.teamName)}</td>
     <td>${t.repCount}</td>
     <td><strong>${t.totalLeads}</strong></td>
-    <td>${isHubspot ? scoreBar(t.avgScore) : '<span style="color:#8892aa">—</span>'}</td>
-    <td><span style="color:#4f8ef7;font-weight:600">${t.categories?.['Core ICP'] || 0}</span></td>
-    <td><span style="color:#22c55e;font-weight:600">${t.categories?.['Strong ICP'] || 0}</span></td>
-    <td><span style="color:#ef4444;font-weight:600">${t.categories?.['Non ICP'] || 0}</span></td>
+    <td>${isHubspot ? scoreBar(t.avgScore) : '<span style="color:#707070">—</span>'}</td>
+    <td><span style="color:#0129AC;font-weight:600">${t.categories?.['Core ICP'] || 0}</span></td>
+    <td><span style="color:#0ED380;font-weight:600">${t.categories?.['Strong ICP'] || 0}</span></td>
+    <td><span style="color:#E8A400;font-weight:600">${t.categories?.['Moderate ICP'] || 0}</span></td>
+    <td><span style="color:#FF1F1F;font-weight:600">${t.categories?.['Non ICP'] || 0}</span></td>
   </tr>`).join('');
 }
 
@@ -671,12 +673,12 @@ function renderRepTopLeads(leads, isHubspot = false) {
   tbody.innerHTML = leads.slice(0, 20).map(l => `<tr>
     <td>
       <div style="font-weight:500">${escHtml(l.name || '—')}</div>
-      <div style="font-size:12px;color:#8892aa">${escHtml(l.email || '')}</div>
+      <div style="font-size:12px;color:#707070">${escHtml(l.email || '')}</div>
     </td>
-    <td style="color:#8892aa">${escHtml(l.companyName || '—')}</td>
-    <td style="color:#8892aa;font-size:12px">${escHtml(l.jobTitle || '—')}</td>
-    <td style="color:#8892aa">${escHtml(l.country || '—')}</td>
-    <td style="color:#8892aa;font-size:12px">${isHubspot ? escHtml(l.ownerName || '—') : '—'}</td>
+    <td style="color:#707070">${escHtml(l.companyName || '—')}</td>
+    <td style="color:#707070;font-size:12px">${escHtml(l.jobTitle || '—')}</td>
+    <td style="color:#707070">${escHtml(l.country || '—')}</td>
+    <td style="color:#707070;font-size:12px">${isHubspot ? escHtml(l.ownerName || '—') : '—'}</td>
     <td style="font-size:12px">${escHtml(l.leadSource || '—')}</td>
     <td>${scoreBar(l.score)}</td>
     <td>${categoryBadge(l.category)}</td>
@@ -689,8 +691,7 @@ async function viewUploadDetail(uploadId) {
     const u    = data.upload;
     switchView('pdf');
     fileLeads = u.leads;
-    renderFileResults({ total: u.leadCount, stats: u.stats, enrichStats: { enriched: u.enrichedCount, total: u.leadCount }, leads: u.leads });
-    renderEnrichBanner({ enriched: u.enrichedCount, total: u.leadCount });
+    renderFileResults({ total: u.leadCount, stats: u.stats, leads: u.leads });
     document.getElementById('pdfResults').classList.remove('hidden');
     showToast(`Viewing upload: ${u.filename} by ${u.repName}`);
   } catch (err) {
@@ -732,7 +733,7 @@ function renderModalContent() {
   repsList.innerHTML = allReps.length
     ? allReps.map(r => `
       <div class="item-row">
-        <span class="item-name">${escHtml(r.name)} <span style="color:#8892aa;font-size:12px">${r.email ? '('+escHtml(r.email)+')' : ''} ${r.teamName ? '· '+escHtml(r.teamName) : ''}</span></span>
+        <span class="item-name">${escHtml(r.name)} <span style="color:#707070;font-size:12px">${r.email ? '('+escHtml(r.email)+')' : ''} ${r.teamName ? '· '+escHtml(r.teamName) : ''}</span></span>
         <button class="btn btn-danger" style="padding:4px 10px;font-size:11px" onclick="deleteRepAction('${r.id}')">Delete</button>
       </div>`).join('')
     : '<div class="empty" style="padding:12px;font-size:13px">No reps yet</div>';
@@ -776,6 +777,7 @@ async function addRepAction() {
     document.getElementById('newRepEmail').value = '';
     await loadRepsAndTeams();
     renderModalContent();
+    refreshRepSelectors();
     showToast('Rep added');
   } catch (err) { showToast('Error: ' + err.message); }
 }
@@ -786,6 +788,7 @@ async function deleteRepAction(id) {
     await apiFetch(`/reps/${id}`, { method: 'DELETE' });
     await loadRepsAndTeams();
     renderModalContent();
+    refreshRepSelectors();
     showToast('Rep deleted');
   } catch (err) { showToast('Error: ' + err.message); }
 }
@@ -867,12 +870,6 @@ async function loadHubspotPullView() {
   const searchEl = document.getElementById('pullSearch');
   if (searchEl) searchEl.addEventListener('input', filterPullTable);
 
-  // Select all checkbox
-  const chkAll = document.getElementById('chkPullAll');
-  if (chkAll) chkAll.addEventListener('change', e => {
-    document.querySelectorAll('.pull-row-chk').forEach(c => c.checked = e.target.checked);
-  });
-
   hubspotPullViewReady = true;
 }
 
@@ -915,7 +912,7 @@ function populateMqlTypeDropdown() {
 function renderLeadSourceGrid() {
   const grid = document.getElementById('leadSourceGrid');
   if (!hsLeadSrcs.length) {
-    grid.innerHTML = '<span style="color:#8892aa;font-size:13px">No lead sources found in HubSpot.</span>';
+    grid.innerHTML = '<span style="color:#707070;font-size:13px">No lead sources found in HubSpot.</span>';
     return;
   }
   grid.innerHTML = hsLeadSrcs.map(src => `
@@ -1031,8 +1028,7 @@ async function pullAndScore() {
     if (data.enrichStats) {
       banner.className = 'enrich-banner ' + (data.enrichStats.enriched > 0 ? 'success' : 'warn');
       banner.innerHTML = `<strong>Apollo Enrichment:</strong> ${data.enrichStats.enriched} of ${data.enrichStats.total} enriched` +
-        (data.enrichStats.failed ? ` · ${data.enrichStats.failed} not found` : '') +
-        (data.wroteBack ? ' · <strong>✅ Scores written to HubSpot</strong>' : '');
+        (data.enrichStats.failed ? ` · ${data.enrichStats.failed} not found` : '');
       banner.classList.remove('hidden');
     }
 
@@ -1050,7 +1046,7 @@ async function pullAndScore() {
     document.getElementById('pullResultCount').textContent = `${data.total} contacts pulled`;
     renderPullResults(data.leads);
     results.classList.remove('hidden');
-    showToast(`Scored ${data.total} contacts` + (data.wroteBack ? ' — written to HubSpot!' : ''), 4000);
+    showToast(`Scored ${data.total} contacts`, 4000);
   } catch (err) {
     progress.classList.add('hidden');
     showToast('Pull failed: ' + err.message, 5000);
@@ -1070,7 +1066,7 @@ function scoreBreakdownMini(bd) {
   return `<div class="breakdown-row">${dims.map(d => {
     const val = bd[d.key] ?? 0;
     const pct = Math.round((val / d.max) * 100);
-    const col = pct >= 80 ? '#22c55e' : pct >= 40 ? '#f59e0b' : '#ef4444';
+    const col = pct >= 80 ? '#0ED380' : pct >= 40 ? '#E8A400' : '#FF1F1F';
     return `<div class="breakdown-dim">
       <div class="breakdown-label">${d.label}</div>
       <div class="breakdown-track"><div class="breakdown-fill" style="width:${pct}%;background:${col}"></div></div>
@@ -1082,7 +1078,7 @@ function scoreBreakdownMini(bd) {
 function renderPullResults(contacts) {
   const tbody = document.getElementById('tbodyPull');
   if (!contacts || !contacts.length) {
-    tbody.innerHTML = '<tr><td colspan="12" class="empty">No contacts found. Adjust filters and try again.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11" class="empty">No contacts found. Adjust filters and try again.</td></tr>';
     return;
   }
   tbody.innerHTML = contacts.map((l, i) => {
@@ -1091,24 +1087,23 @@ function renderPullResults(contacts) {
     const destCloud  = l.typeOfDestination || l.destinationCloud || '—';
     const srcCloud   = l.sourceCloud || '—';
     return `<tr data-idx="${i}">
-      <td><input type="checkbox" class="pull-row-chk" data-idx="${i}" /></td>
       <td style="cursor:pointer" onclick="showLeadDetail(pullLeads[${i}])">
-        <div style="font-weight:500;color:var(--blue-light,#2d5ce6)">${escHtml(l.name||'—')}</div>
+        <div style="font-weight:500;color:var(--blue-light,#0129AC)">${escHtml(l.name||'—')}</div>
         <div style="font-size:12px;color:var(--muted)">${escHtml(l.email||'')}</div>
-        ${l.jobTitle ? `<div style="font-size:11px;color:#6b7280">${escHtml(l.jobTitle)}</div>` : ''}
+        ${l.jobTitle ? `<div style="font-size:11px;color:#707070">${escHtml(l.jobTitle)}</div>` : ''}
       </td>
       <td>
         <div style="font-weight:500;font-size:13px">${escHtml(l.ownerName||'—')}</div>
-        ${l.ownerEmail ? `<div style="font-size:11px;color:#8892aa">${escHtml(l.ownerEmail)}</div>` : ''}
+        ${l.ownerEmail ? `<div style="font-size:11px;color:#707070">${escHtml(l.ownerEmail)}</div>` : ''}
       </td>
-      <td style="color:#8892aa;font-size:13px">${escHtml(ownerTeam)}</td>
+      <td style="color:#707070;font-size:13px">${escHtml(ownerTeam)}</td>
       <td><span class="badge badge-source">${escHtml(src)}</span></td>
-      <td style="color:#8892aa;font-size:12px">${escHtml(l.mqlType||'—')}</td>
+      <td style="color:#707070;font-size:12px">${escHtml(l.mqlType||'—')}</td>
       <td>
-        ${srcCloud !== '—' ? `<div style="font-size:11px;color:#8892aa">From: <span style="color:#f59e0b">${escHtml(srcCloud)}</span></div>` : ''}
-        <div style="font-size:12px;font-weight:500;color:${destCloud!=='—'?'#22c55e':'#8892aa'}">${escHtml(destCloud)}</div>
+        ${srcCloud !== '—' ? `<div style="font-size:11px;color:#707070">From: <span style="color:#E8A400">${escHtml(srcCloud)}</span></div>` : ''}
+        <div style="font-size:12px;font-weight:500;color:${destCloud!=='—'?'#0ED380':'#707070'}">${escHtml(destCloud)}</div>
       </td>
-      <td style="color:#8892aa;font-size:12px">${formatDate(l.ownerAssignedDate)}</td>
+      <td style="color:#707070;font-size:12px">${formatDate(l.ownerAssignedDate)}</td>
       <td>${scoreBar(l.score)}</td>
       <td>${scoreBreakdownMini(l.breakdown)}</td>
       <td>${categoryBadge(l.category)}</td>
@@ -1156,22 +1151,59 @@ function downloadPullCSV() {
 
 async function loadContacts() {
   const tbody = document.getElementById('tbodyContacts');
-  tbody.innerHTML = '<tr><td colspan="6" class="empty"><div class="spinner" style="margin:auto"></div></td></tr>';
+  tbody.innerHTML = '<tr><td colspan="11" class="empty"><div class="spinner" style="margin:auto"></div></td></tr>';
   try {
     const data  = await apiFetch('/contacts');
     allContacts = data.contacts;
     renderContactsTable(allContacts);
     document.getElementById('contactsMeta').textContent = `${data.total} contacts`;
-  } catch (err) { tbody.innerHTML = `<tr><td colspan="6" class="empty">Error: ${escHtml(err.message)}</td></tr>`; }
+  } catch (err) { tbody.innerHTML = `<tr><td colspan="11" class="empty">Error: ${escHtml(err.message)}</td></tr>`; }
 }
+
+// Cells shared by the Contacts & Dashboard tables: the 5 scoring-input fields +
+// the per-dimension breakdown, so a viewer can verify the score by eye.
+function scoringInputCells(l) {
+  const emp  = l.numberOfEmployees != null && l.numberOfEmployees !== ''
+    ? Number(l.numberOfEmployees).toLocaleString() : '—';
+  const src  = l.sourceCloud || '—';
+  const dest = l.destinationCloud || l.typeOfDestination || '—';
+  return `
+    <td style="color:#707070;font-size:12px">${escHtml(l.jobTitle || '—')}</td>
+    <td style="color:#707070">${emp}</td>
+    <td style="color:#707070">${escHtml(l.country || '—')}</td>
+    <td style="color:#707070;font-size:12px">${escHtml(l.industry || '—')}</td>
+    <td style="font-size:12px">
+      <span style="color:#E8A400">${escHtml(src)}</span>
+      <span style="color:#707070"> → </span>
+      <span style="color:#0ED380">${escHtml(dest)}</span>
+    </td>
+    <td>${scoreBreakdownMini(l.breakdown)}</td>`;
+}
+
+// Normalise a raw contacts-list row (snake_case columns) to the lead shape
+// used by showLeadDetail and scoringInputCells.
+function contactToLead(c) {
+  return {
+    name: c.name, email: c.email, jobTitle: c.title,
+    numberOfEmployees: c.numberofemployees, country: c.country, industry: c.industry,
+    sourceCloud: c.source_cloud,
+    destinationCloud: c.destination_cloud || c.type_of_destination,
+    typeOfDestination: c.type_of_destination, companyName: c.company_name,
+    score: c.score, category: c.category, priority: c.priority,
+    breakdown: c.breakdown, createDate: c.create_date
+  };
+}
+
+let contactsRendered = [];
 
 function renderContactsTable(contacts) {
   const tbody = document.getElementById('tbodyContacts');
-  if (!contacts.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty">No contacts match your filter.</td></tr>'; return; }
-  tbody.innerHTML = contacts.map(c => `<tr>
-    <td><div style="font-weight:500">${escHtml(c.name||'—')}</div><div style="font-size:12px;color:#8892aa">${escHtml(c.email||'')}</div></td>
-    <td style="color:#8892aa">${escHtml(c.title||'—')}</td>
-    <td style="color:#8892aa">${escHtml(c.country||'—')}</td>
+  if (!contacts.length) { tbody.innerHTML = '<tr><td colspan="11" class="empty">No contacts match your filter.</td></tr>'; return; }
+  contactsRendered = contacts.map(contactToLead);
+  tbody.innerHTML = contacts.map((c, i) => `<tr style="cursor:pointer" onclick="showLeadDetail(contactsRendered[${i}])">
+    <td><div style="font-weight:500;color:var(--blue-light,#0129AC)">${escHtml(c.name||'—')}</div><div style="font-size:12px;color:#707070">${escHtml(c.email||'')}</div></td>
+    <td style="font-size:12.5px;color:var(--muted)">${escHtml(getContactSegment(c))}</td>
+    ${scoringInputCells(contactsRendered[i])}
     <td>${scoreBar(c.score)}</td>
     <td>${categoryBadge(c.category)}</td>
     <td>${priorityBadge(c.priority)}</td>
@@ -1194,40 +1226,212 @@ function filterContacts() {
     if (q && !(c.name||'').toLowerCase().includes(q) && !(c.email||'').toLowerCase().includes(q)) return false;
     if (cat && c.category !== cat) return false;
     if (seg && getContactSegment(c) !== seg) return false;
-    if (dateFrom && c.create_date && c.create_date < dateFrom) return false;
-    if (dateTo   && c.create_date && c.create_date > dateTo)   return false;
+    // Normalize timestamps to YYYY-MM-DD so the "To" boundary is inclusive
+    const created = c.create_date ? String(c.create_date).slice(0, 10) : '';
+    if (dateFrom && created && created < dateFrom) return false;
+    if (dateTo   && created && created > dateTo)   return false;
     return true;
   }));
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  Run Scoring (HubSpot)
+//  Combinations (Source → Destination)
 // ══════════════════════════════════════════════════════════════════════════════
 
-async function runScoringAll() {
-  const btn      = document.getElementById('btnScoreAllBig');
-  const progress = document.getElementById('scoreProgress');
-  const result   = document.getElementById('scoreResult');
-  if (btn) btn.disabled = true;
-  progress.classList.remove('hidden');
-  result.classList.add('hidden');
-  document.getElementById('scoreProgressMsg').textContent = 'Re-scoring cached contacts…';
+let comboCombinations  = [];   // aggregated combos from the last load
+let comboGridRendered  = [];   // combos currently rendered as cards (filtered view)
+let comboContacts      = [];   // customers for the currently selected combo
+let comboSelected      = null; // { source, destination }
+let comboCountriesReady = false;
+
+function comboFilters() {
+  return {
+    country:  document.getElementById('comboCountry')?.value || '',
+    dateFrom: document.getElementById('comboDateFrom')?.value || '',
+    dateTo:   document.getElementById('comboDateTo')?.value || ''
+  };
+}
+
+async function loadCombinations() {
+  const grid = document.getElementById('comboGrid');
+  grid.innerHTML = '<div class="spinner" style="margin:20px auto"></div>';
   try {
-    const data = await apiFetch('/sync/rescore', { method: 'POST' });
-    progress.classList.add('hidden');
-    result.className = 'score-result success';
-    result.innerHTML = `<strong>Done!</strong> ${data.rescored} contacts re-scored locally.`;
-    result.classList.remove('hidden');
-    showToast(`Re-scored ${data.rescored} contacts`);
+    const { country, dateFrom, dateTo } = comboFilters();
+    const params = new URLSearchParams();
+    if (country)  params.set('country', country);
+    if (dateFrom) params.set('dateFrom', dateFrom);
+    if (dateTo)   params.set('dateTo', dateTo);
+
+    const data = await apiFetch('/combinations?' + params.toString());
+    comboCombinations = data.combinations || [];
+
+    // Populate the country dropdown once (preserve current selection)
+    if (!comboCountriesReady && Array.isArray(data.countries)) {
+      const sel = document.getElementById('comboCountry');
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">All Countries</option>' +
+        data.countries.map(c => `<option value="${escHtml(c)}">${escHtml(c)}</option>`).join('');
+      sel.value = cur;
+      comboCountriesReady = true;
+    }
+
+    filterComboGrid();
+
+    // If the popup is open for a selected combo, refresh its list under the new filters
+    const modalOpen = !document.getElementById('comboModalOverlay').classList.contains('hidden');
+    if (comboSelected && modalOpen) {
+      const stillExists = comboCombinations.some(c =>
+        c.source === comboSelected.source && c.destination === comboSelected.destination);
+      if (stillExists) selectCombination(comboSelected.source, comboSelected.destination);
+      else { comboSelected = null; closeComboModal(); }
+    }
   } catch (err) {
-    progress.classList.add('hidden');
-    result.className  = 'score-result error';
-    result.textContent = 'Error: ' + err.message;
-    result.classList.remove('hidden');
-    showToast('Re-scoring failed: ' + err.message);
-  } finally {
-    if (btn) btn.disabled = false;
+    grid.innerHTML = `<p class="empty">Error: ${escHtml(err.message)}</p>`;
   }
+}
+
+function renderCombinationGrid(combos) {
+  const grid  = document.getElementById('comboGrid');
+  const count = document.getElementById('comboCount');
+  const totalCustomers = combos.reduce((s, c) => s + c.total, 0);
+  count.textContent = combos.length
+    ? `· ${combos.length} combinations, ${totalCustomers} customers`
+    : '';
+
+  if (!combos.length) {
+    grid.innerHTML = '<p class="empty" style="padding:20px">No source → destination combinations for these filters. Try clearing the country/date filters or run a sync first.</p>';
+    return;
+  }
+
+  comboGridRendered = combos;
+  grid.innerHTML = combos.map((c, i) => {
+    const active = comboSelected &&
+      comboSelected.source === c.source && comboSelected.destination === c.destination;
+    return `
+      <div class="combo-card${active ? ' combo-card-active' : ''}" data-idx="${i}"
+           onclick="selectCombinationByIndex(${i})">
+        <div class="combo-route">
+          <span class="combo-src">${escHtml(c.source)}</span>
+          <span class="combo-arrow">→</span>
+          <span class="combo-dest">${escHtml(c.destination)}</span>
+        </div>
+        <div class="combo-total">${c.total}<span>customers</span></div>
+        <div class="combo-meta">
+          <span class="combo-avg">Avg ICP <b>${c.avgScore || '—'}</b></span>
+        </div>
+        <div class="combo-cats">
+          <span class="combo-cat" title="Core ICP"><span class="seg-dot dot-core"></span>${c.categories['Core ICP'] || 0}</span>
+          <span class="combo-cat" title="Strong ICP"><span class="seg-dot dot-strong"></span>${c.categories['Strong ICP'] || 0}</span>
+          <span class="combo-cat" title="Moderate ICP"><span class="seg-dot dot-moderate"></span>${c.categories['Moderate ICP'] || 0}</span>
+          <span class="combo-cat" title="Non ICP"><span class="seg-dot dot-non"></span>${c.categories['Non ICP'] || 0}</span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+/** Filter the combination cards by the search box (matches source / destination). */
+function filterComboGrid() {
+  const q = (document.getElementById('comboGridSearch')?.value || '').toLowerCase().trim();
+  const list = !q ? comboCombinations : comboCombinations.filter(c =>
+    `${c.source} → ${c.destination}`.toLowerCase().includes(q) ||
+    (c.source || '').toLowerCase().includes(q) ||
+    (c.destination || '').toLowerCase().includes(q));
+  renderCombinationGrid(list);
+}
+
+// Dispatch from a card click by index — avoids embedding values with quotes/apostrophes in inline HTML.
+function selectCombinationByIndex(i) {
+  const c = comboGridRendered[i];
+  if (c) selectCombination(c.source, c.destination);
+}
+
+function closeComboModal() {
+  document.getElementById('comboModalOverlay').classList.add('hidden');
+}
+
+async function selectCombination(source, destination) {
+  comboSelected = { source, destination };
+  filterComboGrid();  // refresh active highlight (respecting the search filter)
+
+  const tbody = document.getElementById('tbodyCombo');
+  document.getElementById('comboModalOverlay').classList.remove('hidden');  // open popup
+  document.getElementById('comboResultsTitle').textContent = `${source} → ${destination}`;
+  document.getElementById('comboModalCount').textContent = '';
+  tbody.innerHTML = '<tr><td colspan="12" class="empty"><div class="spinner" style="margin:auto"></div></td></tr>';
+
+  try {
+    const { country, dateFrom, dateTo } = comboFilters();
+    const params = new URLSearchParams({ source, destination });
+    if (country)  params.set('country', country);
+    if (dateFrom) params.set('dateFrom', dateFrom);
+    if (dateTo)   params.set('dateTo', dateTo);
+
+    const data = await apiFetch('/combinations/contacts?' + params.toString());
+    comboContacts = data.contacts || [];
+    renderComboContacts(comboContacts);
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="12" class="empty">Error: ${escHtml(err.message)}</td></tr>`;
+  }
+}
+
+function renderComboContacts(contacts) {
+  const tbody = document.getElementById('tbodyCombo');
+  document.getElementById('comboModalCount').textContent = `${contacts.length} customers`;
+  if (!contacts.length) {
+    tbody.innerHTML = '<tr><td colspan="12" class="empty">No customers for this combination.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = contacts.map((l, i) => `<tr style="cursor:pointer" onclick="showLeadDetail(comboContacts[${i}])">
+    <td>
+      <div style="font-weight:500;color:var(--blue-light,#0129AC)">${escHtml(l.name || '—')}</div>
+      <div style="font-size:12px;color:#707070">${escHtml(l.email || '')}</div>
+    </td>
+    <td style="color:#707070">${escHtml(l.companyName || '—')}</td>
+    <td style="color:#707070;font-size:12px">${escHtml(l.ownerName || '—')}</td>
+    ${scoringInputCells(l)}
+    <td>${scoreBar(l.score)}</td>
+    <td>${categoryBadge(l.category)}</td>
+    <td>${priorityBadge(l.priority)}</td>
+  </tr>`).join('');
+}
+
+function filterComboTable() {
+  const q = (document.getElementById('comboSearch')?.value || '').toLowerCase();
+  const rows = document.querySelectorAll('#tbodyCombo tr');
+  rows.forEach(row => {
+    if (row.querySelector('.empty')) return;
+    row.style.display = !q || row.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+
+function clearComboFilters() {
+  document.getElementById('comboCountry').value    = '';
+  document.getElementById('comboDateFrom').value   = '';
+  document.getElementById('comboDateTo').value     = '';
+  document.getElementById('comboGridSearch').value = '';
+  loadCombinations();
+}
+
+function downloadComboCSV() {
+  if (!comboContacts.length) { showToast('No data to export'); return; }
+  const headers = ['Name','Email','Company','Job Title','Country','Source Cloud','Destination Cloud',
+    'Lead Source','Owner','Created Date','Employees','Industry','Score','Category','Priority'];
+  const rows = comboContacts.map(l => [
+    l.name || '', l.email || '', l.companyName || '', l.jobTitle || '', l.country || '',
+    l.sourceCloud || '', l.destinationCloud || l.typeOfDestination || '',
+    l.leadSource || '', l.ownerName || '', l.createDate || '',
+    l.numberOfEmployees || '', l.industry || '',
+    l.score ?? '', l.category || '', l.priority || ''
+  ]);
+  const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  const safe = (comboSelected ? `${comboSelected.source}_to_${comboSelected.destination}` : 'combination').replace(/[^a-z0-9]+/gi, '_');
+  a.href = url; a.download = `${safe}_customers.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('CSV downloaded');
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1278,7 +1482,6 @@ async function analyzeFile(file) {
   const progress = document.getElementById('pdfProgress');
   const errEl    = document.getElementById('pdfError');
   const results  = document.getElementById('pdfResults');
-  const enrichOn = document.getElementById('chkEnrich')?.checked !== false;
   const repId    = document.getElementById('uploadRepSelect')?.value || '';
 
   btn.disabled = true;
@@ -1286,19 +1489,14 @@ async function analyzeFile(file) {
   errEl.classList.add('hidden');
   results.classList.add('hidden');
 
-  const progressMsg = document.getElementById('pdfProgressMsg');
-  if (enrichOn) {
-    progressMsg.textContent = 'Uploading file & enriching leads via Apollo… this may take a moment';
-  } else {
-    progressMsg.textContent = 'Processing file…';
-  }
+  document.getElementById('pdfProgressMsg').textContent = 'Processing file & scoring…';
 
   try {
     const formData = new FormData();
     formData.append('file', file);
 
-    const enrichParam = enrichOn ? 'true' : 'false';
-    let url = `${API}/file/analyze?enrich=${enrichParam}`;
+    // Enrichment disabled — score directly on the file's values
+    let url = `${API}/file/analyze?enrich=false`;
     if (repId) url += `&repId=${encodeURIComponent(repId)}`;
 
     const res = await fetch(url, { method: 'POST', body: formData });
@@ -1308,14 +1506,10 @@ async function analyzeFile(file) {
     progress.classList.add('hidden');
     fileLeads = data.leads;
     renderFileResults(data);
-    renderEnrichBanner(data.enrichStats);
     results.classList.remove('hidden');
 
-    const enrichMsg = data.enrichStats?.enriched
-      ? ` (${data.enrichStats.enriched} enriched via Apollo)`
-      : '';
     const repMsg = repId ? ' — tracked for rep' : '';
-    showToast(`Scored ${data.total} leads${enrichMsg}${repMsg}`, 4000);
+    showToast(`Scored ${data.total} leads${repMsg}`, 4000);
   } catch (err) {
     progress.classList.add('hidden');
     errEl.className = 'score-result error';
@@ -1329,6 +1523,7 @@ async function analyzeFile(file) {
 
 function renderEnrichBanner(enrichStats) {
   const banner = document.getElementById('enrichBanner');
+  if (!banner) return;  // enrichment UI removed from File Upload
   if (!enrichStats) { banner.style.display = 'none'; return; }
 
   if (enrichStats.skipped) {
@@ -1405,10 +1600,8 @@ async function downloadExcel() {
 function renderFileResults(data) {
   // Stats cards
   const statsEl = document.getElementById('pdfStatsCards');
-  const enriched = data.enrichStats?.enriched || 0;
   const cats = [
     { label:'Total Imported',    value: data.total,                          cls: 'card-blue'   },
-    { label:'Enriched (Apollo)', value: enriched,                            cls: 'card-indigo' },
     { label:'Core ICP',          value: data.stats['Core ICP']     || 0,    cls: 'card-green'  },
     { label:'Strong ICP',        value: data.stats['Strong ICP']   || 0,    cls: 'card-yellow' },
     { label:'Moderate ICP',      value: data.stats['Moderate ICP'] || 0,    cls: 'card-purple' },
@@ -1423,279 +1616,23 @@ function renderFileResults(data) {
   // Table
   const tbody = document.getElementById('tbodyFile');
   if (!data.leads.length) {
-    tbody.innerHTML = '<tr><td colspan="10" class="empty">No leads found in this file.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11" class="empty">No leads found in this file.</td></tr>';
     return;
   }
-  tbody.innerHTML = data.leads.map(l => `<tr>
+  tbody.innerHTML = data.leads.map((l, i) => {
+    const seg = (l.sizeOfBusiness && String(l.sizeOfBusiness).trim()) ? String(l.sizeOfBusiness).trim() : 'Others';
+    return `<tr style="cursor:pointer" onclick="showLeadDetail(fileLeads[${i}])">
     <td>
-      <div style="font-weight:500">${escHtml(l.name||'—')}</div>
-      <div style="font-size:12px;color:#8892aa">${escHtml(l.email||'')}</div>
+      <div style="font-weight:500;color:var(--blue-light,#0129AC)">${escHtml(l.name||'—')}</div>
+      <div style="font-size:12px;color:#707070">${escHtml(l.email||'')}</div>
     </td>
-    <td style="color:#8892aa">${escHtml(l.companyName||'—')}</td>
-    <td style="color:#8892aa">${escHtml(l.jobTitle||'—')}</td>
-    <td style="color:#8892aa">${l.numberOfEmployees ? Number(l.numberOfEmployees).toLocaleString() : '—'}</td>
-    <td style="color:#8892aa">${escHtml(l.country||'—')}</td>
-    <td style="color:#8892aa;font-size:12px">${escHtml(l.industry||'—')}</td>
-    <td style="color:#8892aa;font-size:12px">${formatDate(l.createdDate)}</td>
+    <td style="font-size:12.5px;color:var(--muted)">${escHtml(seg)}</td>
+    ${scoringInputCells(l)}
     <td>${scoreBar(l.score)}</td>
     <td>${categoryBadge(l.category)}</td>
     <td>${priorityBadge(l.priority)}</td>
-  </tr>`).join('');
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  ADMIN PANEL
-// ══════════════════════════════════════════════════════════════════════════════
-
-async function loadAdminConfig() {
-  try {
-    const data = await apiFetch('/admin/config');
-    adminConfig = data.config;
-    renderAdminTab(activeAdminTab);
-  } catch (err) {
-    document.getElementById('adminTabContent').innerHTML =
-      `<div class="score-result error" style="margin:0">${escHtml(err.message)}</div>`;
-  }
-}
-
-function renderAdminTab(tab) {
-  activeAdminTab = tab;
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
-  const el = document.getElementById('adminTabContent');
-  if (!adminConfig) return;
-
-  switch (tab) {
-    case 'companySize': el.innerHTML = renderCompanySize();     break;
-    case 'geography':   el.innerHTML = renderGeoAdmin();        break;
-    case 'industry':    el.innerHTML = renderKeywordsAdmin('industry',   'Industry',    { tier1:'IT / Software (10pts)', tier2:'Finance / Health (8pts)', tier3:'Education (6pts)', other:'Other Detected (4pts)', none:'Not Detected (0pts)' });   break;
-    case 'technology':  el.innerHTML = renderKeywordsAdmin('technology', 'Migration Platform',  { tier1:'Google / Microsoft (10pts)', tier2:'Dropbox / Box / Egnyte… (8pts)', tier3:'Not Provided (5pts)', none:'Both Unsupported (0pts)' }); break;
-    case 'buyerFit':    el.innerHTML = renderKeywordsAdmin('buyerFit',   'Buyer Fit',   { tier1:'C-Level / IT Leadership (10pts)', tier2:'IT Manager / Admin (7pts)', tier3:'Consultant / Freelance (5pts)', other:'Non-IT Role (5pts)', none:'No Title (0pts)' });  break;
-    case 'categories':  el.innerHTML = renderCategories();      break;
-  }
-}
-
-function renderCompanySize() {
-  const rows = adminConfig.companySize.map((tier, i) => `
-    <tr data-cs-index="${i}">
-      <td><input class="admin-input" type="text" data-field="label" value="${escHtml(tier.label)}" /></td>
-      <td><input class="admin-input" type="number" data-field="minEmployees" value="${tier.minEmployees}" min="0" style="width:90px" /></td>
-      <td><input class="admin-input" type="number" data-field="maxEmployees" value="${tier.maxEmployees ?? ''}" placeholder="∞" style="width:90px" /></td>
-      <td><input class="admin-input" type="number" data-field="score" value="${tier.score}" min="0" max="100" style="width:80px" /></td>
-    </tr>`).join('');
-
-  return `<div class="admin-section">
-    <div class="admin-section-title">Company Size Tiers</div>
-    <p class="admin-help">Set the employee count thresholds and score for each tier. Leave "Max" empty for unlimited.</p>
-    <table class="admin-table">
-      <thead><tr><th>Label</th><th>Min Employees</th><th>Max Employees</th><th>Score</th></tr></thead>
-      <tbody id="csTbody">${rows}</tbody>
-    </table>
-  </div>`;
-}
-
-function renderGeoAdmin() {
-  const { tier1, tier2, other } = adminConfig.geography;
-  return `<div class="admin-section">
-    <div class="admin-section-title">Geography Scoring</div>
-    <p class="admin-help">Enter country names, one per line. Matching is case-insensitive.</p>
-    ${renderGeoTier('geo-t1', 'Tier 1 — US / Canada / UK', tier1.score, tier1.countries.join('\n'))}
-    ${renderGeoTier('geo-t2', 'Tier 2 — Europe / Australia / India', tier2.score, tier2.countries.join('\n'))}
-    <div class="tier-block">
-      <div class="tier-header">
-        <span class="tier-label">Other Regions</span>
-        <div class="tier-score-wrap">Score: <input class="tier-score-input" id="geo-other-score" type="number" value="${other.score}" /></div>
-      </div>
-    </div>
-  </div>`;
-}
-
-function renderGeoTier(id, label, score, countries) {
-  return `<div class="tier-block">
-    <div class="tier-header">
-      <span class="tier-label">${escHtml(label)}</span>
-      <div class="tier-score-wrap">Score: <input class="tier-score-input" id="${id}-score" type="number" value="${score}" /></div>
-    </div>
-    <textarea class="keywords-area" id="${id}-countries" rows="4">${escHtml(countries)}</textarea>
-    <div class="keywords-hint">One country per line</div>
-  </div>`;
-}
-
-function renderKeywordsAdmin(dimension, title, tierLabels) {
-  const dim    = adminConfig[dimension];
-  const tiers  = Object.keys(tierLabels);
-  const blocks = tiers.map(t => {
-    const tier = dim[t];
-    if (!tier) return '';
-    const hasKeywords = Array.isArray(tier.keywords);
-    return `<div class="tier-block">
-      <div class="tier-header">
-        <span class="tier-label">${escHtml(tierLabels[t])}</span>
-        <div class="tier-score-wrap">Score: <input class="tier-score-input" id="${dimension}-${t}-score" type="number" value="${tier.score}" /></div>
-      </div>
-      ${hasKeywords ? `
-        <textarea class="keywords-area" id="${dimension}-${t}-keywords">${escHtml(tier.keywords.join(', '))}</textarea>
-        <div class="keywords-hint">Comma-separated keywords (case-insensitive)</div>
-      ` : ''}
-    </div>`;
+  </tr>`;
   }).join('');
-
-  return `<div class="admin-section">
-    <div class="admin-section-title">${escHtml(title)} Tier Keywords</div>
-    <p class="admin-help">Enter keywords that identify each tier. A lead matches a tier if any keyword is found in the relevant field.</p>
-    ${blocks}
-  </div>`;
-}
-
-function renderCategories() {
-  const rows = adminConfig.categories.map((cat, i) => `
-    <tr data-cat-index="${i}">
-      <td><input class="admin-input" type="text" data-field="label" value="${escHtml(cat.label)}" /></td>
-      <td><input class="admin-input" type="text" data-field="priority" value="${escHtml(cat.priority)}" /></td>
-      <td><input class="admin-input" type="number" data-field="min" value="${cat.min}" min="0" max="100" style="width:80px" /></td>
-      <td><input class="admin-input" type="number" data-field="max" value="${cat.max}" min="0" max="100" style="width:80px" /></td>
-    </tr>`).join('');
-
-  return `<div class="admin-section">
-    <div class="admin-section-title">ICP Category Thresholds</div>
-    <p class="admin-help">Set the score range for each ICP category. Ranges should not overlap and should collectively cover 0–100.</p>
-    <table class="admin-table">
-      <thead><tr><th>Category Label</th><th>Priority Label</th><th>Min Score</th><th>Max Score</th></tr></thead>
-      <tbody id="catTbody">${rows}</tbody>
-    </table>
-  </div>`;
-}
-
-function collectAdminConfig() {
-  const cfg = JSON.parse(JSON.stringify(adminConfig));
-
-  document.querySelectorAll('#csTbody tr[data-cs-index]').forEach(row => {
-    const i   = parseInt(row.dataset.csIndex);
-    const get = field => row.querySelector(`[data-field="${field}"]`)?.value;
-    cfg.companySize[i].label        = get('label');
-    cfg.companySize[i].minEmployees = parseInt(get('minEmployees')) || 0;
-    const mx = get('maxEmployees');
-    cfg.companySize[i].maxEmployees = mx === '' ? null : parseInt(mx);
-    cfg.companySize[i].score        = parseInt(get('score')) || 0;
-  });
-
-  const geoT1Score = document.getElementById('geo-t1-score');
-  const geoT2Score = document.getElementById('geo-t2-score');
-  const geoOScore  = document.getElementById('geo-other-score');
-  const geoT1C     = document.getElementById('geo-t1-countries');
-  const geoT2C     = document.getElementById('geo-t2-countries');
-  if (geoT1Score) {
-    cfg.geography.tier1.score     = parseInt(geoT1Score.value) || 0;
-    cfg.geography.tier1.countries = (geoT1C?.value || '').split('\n').map(s=>s.trim()).filter(Boolean);
-    cfg.geography.tier2.score     = parseInt(geoT2Score?.value) || 0;
-    cfg.geography.tier2.countries = (geoT2C?.value || '').split('\n').map(s=>s.trim()).filter(Boolean);
-    cfg.geography.other.score     = parseInt(geoOScore?.value) || 0;
-  }
-
-  ['industry','technology','buyerFit'].forEach(dim => {
-    const tierKeys = Object.keys(cfg[dim]);
-    tierKeys.forEach(t => {
-      const scoreEl   = document.getElementById(`${dim}-${t}-score`);
-      const kwEl      = document.getElementById(`${dim}-${t}-keywords`);
-      if (scoreEl) cfg[dim][t].score = parseInt(scoreEl.value) || 0;
-      if (kwEl && cfg[dim][t].keywords) {
-        cfg[dim][t].keywords = kwEl.value.split(',').map(k=>k.trim()).filter(Boolean);
-      }
-    });
-  });
-
-  document.querySelectorAll('#catTbody tr[data-cat-index]').forEach(row => {
-    const i   = parseInt(row.dataset.catIndex);
-    const get = field => row.querySelector(`[data-field="${field}"]`)?.value;
-    cfg.categories[i].label    = get('label');
-    cfg.categories[i].priority = get('priority');
-    cfg.categories[i].min      = parseInt(get('min')) || 0;
-    cfg.categories[i].max      = parseInt(get('max')) || 0;
-  });
-
-  return cfg;
-}
-
-async function saveAdminConfig() {
-  const btn    = document.getElementById('btnSaveConfig');
-  const result = document.getElementById('adminResult');
-  btn.disabled = true;
-  result.classList.add('hidden');
-
-  try {
-    const cfg = collectAdminConfig();
-    const saveResp = await apiFetch('/admin/config', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(cfg)
-    });
-    adminConfig = cfg;
-    result.className = 'score-result success';
-    const rescoreMsg = saveResp.rescored > 0
-      ? ` ${saveResp.rescored} stored HubSpot leads re-scored automatically.`
-      : '';
-    result.textContent = 'Scoring config saved!' + rescoreMsg;
-    result.classList.remove('hidden');
-    showToast(saveResp.rescored > 0 ? `Config saved · ${saveResp.rescored} leads re-scored` : 'Config saved', 4000);
-  } catch (err) {
-    result.className = 'score-result error';
-    result.textContent = 'Save failed: ' + err.message;
-    result.classList.remove('hidden');
-    showToast('Save failed: ' + err.message);
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-async function resetAdminConfig() {
-  if (!confirm('Reset all scoring rules to factory defaults? This cannot be undone.')) return;
-  const result = document.getElementById('adminResult');
-  try {
-    const data = await apiFetch('/admin/reset', { method: 'POST' });
-    adminConfig = data.config;
-    renderAdminTab(activeAdminTab);
-    result.className = 'score-result success';
-    result.textContent = 'Config reset to defaults.';
-    result.classList.remove('hidden');
-    showToast('Config reset to defaults');
-  } catch (err) {
-    result.className = 'score-result error';
-    result.textContent = 'Reset failed: ' + err.message;
-    result.classList.remove('hidden');
-  }
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  Setup View
-// ══════════════════════════════════════════════════════════════════════════════
-
-async function runSetup() {
-  const btn = document.getElementById('btnSetup'), progress = document.getElementById('setupProgress'), result = document.getElementById('setupResult');
-  btn.disabled = true; progress.classList.remove('hidden'); result.classList.add('hidden');
-  try {
-    const data = await apiFetch('/setup', { method: 'POST' });
-    progress.classList.add('hidden');
-    const r = data.result;
-    result.className = 'score-result success';
-    result.innerHTML = `<strong>Done!</strong><br/>Created: ${r.created.join(', ')||'none'}<br/>Skipped: ${r.skipped.join(', ')||'none'}`;
-    result.classList.remove('hidden');
-    showToast('HubSpot properties ready');
-  } catch (err) {
-    progress.classList.add('hidden');
-    result.className = 'score-result error'; result.textContent = 'Failed: ' + err.message; result.classList.remove('hidden');
-  } finally { btn.disabled = false; }
-}
-
-async function runConnectionTest() {
-  const btn = document.getElementById('btnTestConn'), result = document.getElementById('connResult');
-  btn.disabled = true; result.classList.add('hidden');
-  try {
-    await apiFetch('/status');
-    result.className = 'score-result success'; result.textContent = 'Connection successful!'; result.classList.remove('hidden');
-    checkConnection();
-  } catch (err) {
-    result.className = 'score-result error'; result.textContent = 'Failed: ' + err.message; result.classList.remove('hidden');
-    checkConnection();
-  } finally { btn.disabled = false; }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1714,18 +1651,28 @@ document.addEventListener('DOMContentLoaded', () => {
     const v = document.querySelector('.view.active')?.id?.replace('view-','');
     if (v === 'dashboard') loadDashboard();
     else if (v === 'contacts') loadContacts();
-    else if (v === 'admin') loadAdminConfig();
     else if (v === 'rep-tracker') loadRepTracker();
     else if (v === 'hubspot-pull') loadHubspotPullView();
+    else if (v === 'combinations') loadCombinations();
     else checkConnection();
   });
-
-  document.getElementById('btnScoreAllBig').addEventListener('click', runScoringAll);
 
   // Contacts
   document.getElementById('contactSearch').addEventListener('input', filterContacts);
   document.getElementById('filterCategory').addEventListener('change', filterContacts);
   document.getElementById('filterSegment').addEventListener('change', filterContacts);
+
+  // Combinations
+  document.getElementById('btnComboApply').addEventListener('click', loadCombinations);
+  document.getElementById('btnComboClear').addEventListener('click', clearComboFilters);
+  document.getElementById('comboGridSearch').addEventListener('input', filterComboGrid);
+  document.getElementById('comboCountry').addEventListener('change', loadCombinations);
+  document.getElementById('comboSearch').addEventListener('input', filterComboTable);
+  document.getElementById('btnComboDownloadCSV').addEventListener('click', downloadComboCSV);
+  document.getElementById('btnCloseComboModal').addEventListener('click', closeComboModal);
+  document.getElementById('comboModalOverlay').addEventListener('click', e => {
+    if (e.target.id === 'comboModalOverlay') closeComboModal();
+  });
 
   // File Upload
   initFileUpload();
@@ -1749,17 +1696,6 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btnAddTeam').addEventListener('click', addTeamAction);
   document.getElementById('btnAddRep').addEventListener('click', addRepAction);
 
-  // Admin
-  document.querySelectorAll('.tab-btn').forEach(btn =>
-    btn.addEventListener('click', () => renderAdminTab(btn.dataset.tab))
-  );
-  document.getElementById('btnSaveConfig').addEventListener('click', saveAdminConfig);
-  document.getElementById('btnResetConfig').addEventListener('click', resetAdminConfig);
-
-  // Setup
-  document.getElementById('btnSetup').addEventListener('click', runSetup);
-  document.getElementById('btnTestConn').addEventListener('click', runConnectionTest);
-
   // Sync button
   document.getElementById('btnSyncHubspot').addEventListener('click', syncHubspot);
 
@@ -1781,6 +1717,17 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (_) {}
     window.location.href = '/login';
   });
+
+  // Default the sync date range to the last 90 days (user can change it)
+  const syncFrom = document.getElementById('syncDateFrom');
+  const syncTo   = document.getElementById('syncDateTo');
+  if (syncFrom && syncTo) {
+    const today = new Date();
+    const past  = new Date();
+    past.setDate(today.getDate() - 90);
+    syncFrom.value = past.toISOString().split('T')[0];
+    syncTo.value   = today.toISOString().split('T')[0];
+  }
 
   // Initial load
   checkConnection();
@@ -1811,7 +1758,7 @@ function showLeadPopup(title, leads) {
         <td>${categoryBadge(l.category)}</td>
         <td><span style="font-size:11px;color:var(--purple)">${escHtml(l.leadSource || '—')}</span></td>
         <td style="font-size:11px">${escHtml(l.destinationCloud || l.typeOfDestination || '—')}</td>
-        <td style="font-size:11px;color:var(--blue-light,#2d5ce6)">View</td>
+        <td style="font-size:11px;color:var(--blue-light,#0129AC)">View</td>
       </tr>
     `).join('');
   }
@@ -1852,22 +1799,22 @@ function showLeadDetail(lead) {
   const cat = lead.category || 'Unscored';
   const bd = lead.breakdown || {};
 
-  let scoreColor = '#ef4444';
-  if (score >= 80) scoreColor = '#2d5ce6';
-  else if (score >= 65) scoreColor = '#65bc7b';
-  else if (score >= 50) scoreColor = '#f59e0b';
+  let scoreColor = '#FF1F1F';
+  if (score >= 80) scoreColor = '#0129AC';
+  else if (score >= 65) scoreColor = '#0ED380';
+  else if (score >= 50) scoreColor = '#E8A400';
 
   const reasons = lead.reasons || {};
   const dims = [
-    { key: 'companySize', label: 'Company Size', max: 35, color: '#2d5ce6',
+    { key: 'companySize', label: 'Company Size', max: 35, color: '#0129AC',
       reason: reasons.companySize || (lead.numberOfEmployees ? lead.numberOfEmployees + ' employees' : '—') },
     { key: 'geography', label: 'Geography', max: 35, color: '#14cfc3',
       reason: reasons.geography || lead.country || '—' },
-    { key: 'industry', label: 'Industry', max: 10, color: '#6239bd',
+    { key: 'industry', label: 'Industry', max: 10, color: '#A100FF',
       reason: reasons.industry || lead.industry || '—' },
-    { key: 'technology', label: 'Migration Platform', max: 10, color: '#65bc7b',
+    { key: 'technology', label: 'Migration Platform', max: 10, color: '#0ED380',
       reason: reasons.technology || [lead.sourceCloud, lead.destinationCloud || lead.typeOfDestination || lead.techStack].filter(Boolean).join(' → ') || '—' },
-    { key: 'buyerFit', label: 'Buyer Fit', max: 10, color: '#f59e0b',
+    { key: 'buyerFit', label: 'Buyer Fit', max: 10, color: '#E8A400',
       reason: reasons.buyerFit || lead.jobTitle || '—' }
   ];
 

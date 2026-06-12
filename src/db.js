@@ -528,8 +528,9 @@ function getDashboardStats() {
   geoRows.forEach(r => { geographyCount[r.region] = r.cnt; });
 
   const highPriority = db.prepare(`
-    SELECT hubspot_id, name, email, icp_score, icp_category, icp_priority,
-           size_of_business
+    SELECT hubspot_id, name, email, jobtitle, country, industry, numberofemployees,
+           company_name, source_cloud, destination_cloud, type_of_destination,
+           icp_score, icp_category, icp_priority, breakdown_json, size_of_business
     FROM contacts
     WHERE icp_priority IN ('Highest Priority', 'High Priority')
     ORDER BY icp_score DESC LIMIT 1000
@@ -537,10 +538,17 @@ function getDashboardStats() {
     let segment = r.size_of_business && r.size_of_business.trim()
       ? r.size_of_business.trim()
       : 'Others';
+    let breakdown = null;
+    try { breakdown = r.breakdown_json ? JSON.parse(r.breakdown_json) : null; } catch (_) {}
     return {
       id: r.hubspot_id, name: r.name, email: r.email,
+      jobTitle: r.jobtitle, country: r.country, industry: r.industry,
+      numberOfEmployees: r.numberofemployees, companyName: r.company_name,
+      sourceCloud: r.source_cloud,
+      destinationCloud: r.destination_cloud || r.type_of_destination,
+      typeOfDestination: r.type_of_destination,
       score: r.icp_score, category: r.icp_category, priority: r.icp_priority,
-      segment
+      breakdown, segment
     };
   });
 
@@ -578,12 +586,18 @@ function getSegmentStats() {
 
 function getContactsList() {
   const db = getDb();
-  return db.prepare(`
-    SELECT hubspot_id as id, name, email, jobtitle as title, country,
-      icp_score as score, icp_category as category, icp_priority as priority,
-      size_of_business, numberofemployees, create_date
+  const rows = db.prepare(`
+    SELECT hubspot_id as id, name, email, jobtitle as title, country, industry,
+      numberofemployees, company_name, source_cloud, destination_cloud, type_of_destination,
+      icp_score as score, icp_category as category, icp_priority as priority, breakdown_json,
+      size_of_business, create_date
     FROM contacts ORDER BY create_date DESC
   `).all();
+  return rows.map(r => {
+    let breakdown = null;
+    try { breakdown = r.breakdown_json ? JSON.parse(r.breakdown_json) : null; } catch (_) {}
+    return { ...r, breakdown };
+  });
 }
 
 function getRepStats(filters = {}) {
@@ -792,11 +806,91 @@ function migrateFromJsonStore() {
   }
 }
 
+// ─── Source → Destination combinations ──────────────────────────────────────
+// SQL expressions that normalise the source / destination cloud values.
+const SRC_EXPR  = `COALESCE(NULLIF(TRIM(source_cloud), ''), 'Unknown')`;
+const DEST_EXPR = `COALESCE(NULLIF(TRIM(type_of_destination), ''), NULLIF(TRIM(destination_cloud), ''), 'Unknown')`;
+
+function buildCombinationWhere(filters = {}, params = {}) {
+  const where = [];
+  if (filters.country) {
+    where.push('LOWER(TRIM(country)) = LOWER(TRIM(@country))');
+    params.country = filters.country;
+  }
+  if (filters.dateFrom) {
+    where.push('create_date >= @dateFrom');
+    params.dateFrom = filters.dateFrom;
+  }
+  if (filters.dateTo) {
+    // inclusive: match the whole "to" day even when create_date carries a time
+    where.push("substr(create_date,1,10) <= @dateTo");
+    params.dateTo = filters.dateTo;
+  }
+  return where;
+}
+
+/** Aggregated source→destination combinations with ICP category counts. */
+function getCombinations(filters = {}) {
+  const db = getDb();
+  const params = {};
+  const where = buildCombinationWhere(filters, params);
+  const whereClause = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  // Group case-insensitively (so "Google Chat" and "Google chat" merge);
+  // MIN() picks a single representative label for display.
+  const sql = `
+    SELECT
+      MIN(${SRC_EXPR})  AS source,
+      MIN(${DEST_EXPR}) AS destination,
+      COUNT(*)                                                       AS total,
+      ROUND(AVG(icp_score))                                          AS avgScore,
+      SUM(CASE WHEN icp_category='Core ICP'     THEN 1 ELSE 0 END)   AS core,
+      SUM(CASE WHEN icp_category='Strong ICP'   THEN 1 ELSE 0 END)   AS strong,
+      SUM(CASE WHEN icp_category='Moderate ICP' THEN 1 ELSE 0 END)   AS moderate,
+      SUM(CASE WHEN icp_category='Non ICP'      THEN 1 ELSE 0 END)   AS non
+    FROM contacts
+    ${whereClause}
+    GROUP BY LOWER(${SRC_EXPR}), LOWER(${DEST_EXPR})
+    ORDER BY total DESC
+  `;
+  return db.prepare(sql).all(params);
+}
+
+/** All contacts for a specific source→destination combination (+ country/date filters). */
+function getCombinationContacts(filters = {}) {
+  const db = getDb();
+  const params = {};
+  const where = buildCombinationWhere(filters, params);
+  // Match case-insensitively so the representative label from the grid
+  // (e.g. "Google Chat") catches all casing variants in the data.
+  if (filters.source) {
+    where.push(`LOWER(${SRC_EXPR}) = LOWER(@source)`);
+    params.source = filters.source;
+  }
+  if (filters.destination) {
+    where.push(`LOWER(${DEST_EXPR}) = LOWER(@destination)`);
+    params.destination = filters.destination;
+  }
+  const whereClause = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  const sql = `SELECT * FROM contacts ${whereClause} ORDER BY icp_score DESC`;
+  return db.prepare(sql).all(params);
+}
+
+/** Distinct, non-empty country values for the filter dropdown. */
+function getDistinctCountries() {
+  const db = getDb();
+  return db.prepare(
+    `SELECT DISTINCT TRIM(country) AS country FROM contacts
+     WHERE country IS NOT NULL AND TRIM(country) <> '' ORDER BY country COLLATE NOCASE`
+  ).all().map(r => r.country);
+}
+
 module.exports = {
   getDb,
   // Contacts
   upsertContact, upsertContactsBatch, clearContacts, getAllContacts, getContactCount,
   updateContactScores,
+  // Combinations
+  getCombinations, getCombinationContacts, getDistinctCountries,
   // Owners
   upsertOwners, getOwners,
   // Property options

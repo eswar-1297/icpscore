@@ -463,11 +463,16 @@ async function getDashboardData() {
 
 // ─── Central filtered pull: always applies mandatory lead source + team + last quarter filters
 async function pullMandatoryContacts(extraFilters = {}) {
-  const { dateFrom, dateTo } = getLastQuarterRange();
+  // Use the caller-supplied From/To date range; fall back to the previous
+  // calendar quarter only when neither bound is provided.
+  let { dateFrom, dateTo } = extraFilters;
+  if (!dateFrom && !dateTo) {
+    ({ dateFrom, dateTo } = getLastQuarterRange());
+  }
   const { fieldName, values: teamIds } = await resolveTeamFilterValues(MANDATORY_TEAM_NAMES);
   console.log(`[pullMandatoryContacts] lead_source IN [${MANDATORY_LEAD_SOURCES.join(', ')}]`);
   console.log(`[pullMandatoryContacts] ${fieldName} IN [${teamIds.join(', ')}] (teams: ${MANDATORY_TEAM_NAMES.join(', ')})`);
-  console.log(`[pullMandatoryContacts] createdate last quarter: ${dateFrom} → ${dateTo}`);
+  console.log(`[pullMandatoryContacts] createdate range: ${dateFrom || '(open)'} → ${dateTo || '(open)'}`);
 
   return searchContactsAdvanced({
     ...extraFilters,

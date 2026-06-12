@@ -719,11 +719,11 @@ router.post('/admin/reset', (req, res) => {
 // POST /api/rep-tracker/sync  — pull HubSpot contacts by date range, score, store per-rep
 router.post('/rep-tracker/sync', async (req, res) => {
   try {
-    const { mqlType, lifecycleStage } = req.body;
+    const { mqlType, lifecycleStage, dateFrom, dateTo } = req.body;
 
-    // Mandatory lead source + team + last-quarter date filters enforced centrally
+    // Mandatory lead source + team filters enforced centrally; date range from request
     const contacts = await hs.pullMandatoryContacts({
-      mqlType, lifecycleStage
+      mqlType, lifecycleStage, dateFrom, dateTo
     });
 
     if (!contacts.length) {
@@ -938,6 +938,77 @@ router.get('/rep-tracker/hs-stats', (req, res) => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
+//  COMBINATIONS — Source → Destination cloud combinations
+// ═════════════════════════════════════════════════════════════════════════════
+
+// Map a raw contacts-table row to the lead shape the UI expects (incl. breakdown).
+function mapContactRowToLead(r, ownerMap = {}) {
+  let breakdown = null;
+  try { breakdown = r.breakdown_json ? JSON.parse(r.breakdown_json) : null; } catch (_) {}
+  return {
+    name:              r.name,
+    email:             r.email,
+    jobTitle:          r.jobtitle,
+    companyName:       r.company_name,
+    country:           r.country,
+    industry:          r.industry,
+    numberOfEmployees: r.numberofemployees,
+    sourceCloud:       r.source_cloud,
+    destinationCloud:  r.type_of_destination || r.destination_cloud,
+    typeOfDestination: r.type_of_destination,
+    leadSource:        r.lead_source,
+    mqlType:           r.mql_type,
+    ownerName:         ownerMap[r.hubspot_owner_id] || null,
+    createDate:        r.create_date,
+    ownerAssignedDate: r.owner_assigned_date,
+    score:             r.icp_score,
+    category:          r.icp_category,
+    priority:          r.icp_priority,
+    breakdown
+  };
+}
+
+// GET /api/combinations — aggregated source→destination combos (+ country/date filters)
+router.get('/combinations', (req, res) => {
+  try {
+    const { country, dateFrom, dateTo } = req.query;
+    const rows = db.getCombinations({ country, dateFrom, dateTo });
+    const combinations = rows
+      // drop rows where we know neither side of the migration
+      .filter(r => !(r.source === 'Unknown' && r.destination === 'Unknown'))
+      .map(r => ({
+        source:      r.source,
+        destination: r.destination,
+        total:       r.total,
+        avgScore:    r.avgScore || 0,
+        categories: {
+          'Core ICP':     r.core,
+          'Strong ICP':   r.strong,
+          'Moderate ICP': r.moderate,
+          'Non ICP':      r.non
+        }
+      }));
+    res.json({ ok: true, combinations, countries: db.getDistinctCountries() });
+  } catch (err) {
+    res.status(500).json({ ok: false, message: err.message });
+  }
+});
+
+// GET /api/combinations/contacts — customers for a chosen combination
+router.get('/combinations/contacts', (req, res) => {
+  try {
+    const { source, destination, country, dateFrom, dateTo } = req.query;
+    const ownerMap = {};
+    db.getOwners().forEach(o => { ownerMap[o.id] = o.name; });
+    const rows = db.getCombinationContacts({ source, destination, country, dateFrom, dateTo });
+    const contacts = rows.map(r => mapContactRowToLead(r, ownerMap));
+    res.json({ ok: true, total: contacts.length, contacts });
+  } catch (err) {
+    res.status(500).json({ ok: false, message: err.message });
+  }
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
 //  SYNC — Pull from HubSpot, store in local SQLite DB
 // ═════════════════════════════════════════════════════════════════════════════
 
@@ -964,8 +1035,10 @@ router.post('/sync/full', async (req, res) => {
     // 3. Clear old contacts so the DB reflects only the filtered range
     db.clearContacts();
 
-    // 4. Pull contacts — mandatory lead source + team + last-quarter date filters enforced centrally
-    const contacts = await hs.pullMandatoryContacts();
+    // 4. Pull contacts — mandatory lead source + team filters enforced centrally;
+    //    date range comes from the request (falls back to previous quarter if omitted)
+    const { dateFrom, dateTo } = req.body || {};
+    const contacts = await hs.pullMandatoryContacts({ dateFrom, dateTo });
     const dates = contacts.map(c => c.properties?.createdate).filter(Boolean).sort();
     console.log(`[sync] HubSpot returned ${contacts.length} contacts`);
     if (dates.length) console.log(`[sync] Date range: ${dates[0]} → ${dates[dates.length - 1]}`);

@@ -2,25 +2,26 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg:        #080b14;
-  --surface:   #0f1422;
-  --surface2:  #161d30;
-  --border:    #1e2744;
-  --text:      #e2e8f0;
-  --muted:     #7b8ba8;
-  --blue:      #0129ac;
-  --blue-light:#2d5ce6;
-  --green:     #65bc7b;
-  --yellow:    #f59e0b;
-  --red:       #ef4444;
-  --purple:    #6239bd;
-  --teal:      #14cfc3;
+  /* ── CloudFuze brand palette (light theme) ─────────────────────────────── */
+  --bg:        #F6F6F6;   /* Off White — page background          */
+  --surface:   #FFFFFF;   /* White — cards, sidebar, topbar       */
+  --surface2:  #E1ECFF;   /* Light Blue Tint — hover / secondary  */
+  --border:    #E6E8EE;   /* Light grey hairline borders          */
+  --text:      #2E2E2E;   /* Dark Grey — body text                */
+  --muted:     #707070;   /* Mid Grey — labels / secondary text   */
+  --blue:      #0129AC;   /* Deep Blue — primary brand            */
+  --blue-light:#0C18D4;   /* Bright Blue — hover / accents        */
+  --green:     #0ED380;   /* Brand green                          */
+  --yellow:    #E8A400;   /* Readable amber                       */
+  --red:       #FF1F1F;   /* Brand red                            */
+  --purple:    #A100FF;   /* Brand purple                         */
+  --teal:      #14CFC3;   /* Brand teal accent                    */
   --radius:    10px;
   --sidebar-w: 230px;
-  --font:      'Inter', 'Segoe UI', system-ui, sans-serif;
+  --font:      'Poppins', 'Segoe UI', system-ui, sans-serif;
 }
 
-html, body { height: 100%; font-family: var(--font); background: var(--bg); color: var(--text); font-size: 14px; }
+html, body { height: 100%; font-family: var(--font); background: var(--bg); color: var(--text); font-size: 14px; color-scheme: light; }
 a { color: inherit; text-decoration: none; }
 button { cursor: pointer; border: none; outline: none; font-family: inherit; }
 input, select, textarea { font-family: inherit; }
@@ -44,7 +45,7 @@ body { display: flex; }
 }
 .brand-icon {
   width: 36px; height: 36px; border-radius: 10px;
-  background: linear-gradient(135deg, var(--blue), var(--purple));
+  background: linear-gradient(135deg, var(--blue), var(--teal));
   display: flex; align-items: center; justify-content: center;
   font-weight: 800; font-size: 10px; color: #fff; letter-spacing: .5px;
   box-shadow: 0 2px 12px rgba(1,41,172,.35);
@@ -87,7 +88,11 @@ body { display: flex; }
   background: var(--surface); flex-shrink: 0;
 }
 .page-title { font-size: 18px; font-weight: 600; }
-.topbar-actions { display: flex; gap: 10px; }
+.topbar-actions { display: flex; gap: 10px; align-items: center; }
+
+/* Sync date-range picker in the topbar */
+.sync-date-range { display: flex; align-items: center; gap: 6px; }
+.sync-date-range .admin-input { width: 140px; padding: 6px 10px; }
 
 /* ── Buttons ──────────────────────────────────────────────────────────────── */
 .btn { padding: 8px 18px; border-radius: 7px; font-size: 13.5px; font-weight: 500; transition: opacity .15s, transform .1s; }
@@ -107,13 +112,7 @@ body { display: flex; }
 
 /* ── Summary cards ────────────────────────────────────────────────────────── */
 .cards-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 24px; }
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 22px; border-top-width: 3px; }
-.card-blue   { border-top-color: var(--blue-light);   }
-.card-green  { border-top-color: var(--green);  }
-.card-yellow { border-top-color: var(--yellow); }
-.card-red    { border-top-color: var(--red);    }
-.card-purple { border-top-color: var(--purple); }
-.card-teal   { border-top-color: var(--teal);   }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 22px; }
 .card-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin-bottom: 8px; }
 .card-value { font-size: 32px; font-weight: 700; }
 
@@ -121,7 +120,7 @@ body { display: flex; }
 .segment-section { margin-bottom: 24px; }
 .segment-section-title { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin-bottom: 12px; }
 .segment-cards-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
-.segment-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; border-top-width: 3px; }
+.segment-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; }
 .seg-title { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
 .seg-range { font-size: 10px; font-weight: 400; color: var(--muted); }
 .seg-total { font-size: 28px; font-weight: 700; margin-bottom: 12px; }
@@ -134,6 +133,32 @@ body { display: flex; }
 .dot-non      { background: var(--red); }
 .seg-cat { flex: 1; color: var(--muted); }
 .seg-cnt { font-weight: 700; }
+
+/* ── Combinations (source → destination) ──────────────────────────────────── */
+.combo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+.combo-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px 16px; cursor: pointer; transition: border-color .15s, transform .1s, box-shadow .15s;
+}
+.combo-card:hover { border-color: var(--blue-light); transform: translateY(-2px); box-shadow: 0 4px 14px rgba(0,0,0,.18); }
+.combo-card-active { border-color: var(--blue-light); box-shadow: 0 0 0 1px var(--blue-light) inset; }
+.combo-route { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; font-size: 13px; font-weight: 600; }
+.combo-src  { color: var(--yellow); }
+.combo-dest { color: var(--green); }
+.combo-arrow { color: var(--muted); }
+.combo-total { font-size: 26px; font-weight: 700; line-height: 1; }
+.combo-total span { font-size: 11px; font-weight: 400; color: var(--muted); margin-left: 6px; }
+.combo-meta { margin: 8px 0; font-size: 12px; color: var(--muted); }
+.combo-avg b { color: var(--text); }
+.combo-cats { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); border-top: 1px solid var(--border); padding-top: 8px; }
+.combo-cat { display: flex; align-items: center; gap: 5px; }
+
+/* Small "which dimension this field feeds" hint in table headers */
+.th-dim {
+  display: inline-block; margin-left: 5px; padding: 1px 6px; border-radius: 4px;
+  font-size: 9.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em;
+  background: var(--surface2); color: var(--muted); vertical-align: middle;
+}
 
 /* ── Charts ───────────────────────────────────────────────────────────────── */
 .charts-row { display: grid; grid-template-columns: 1fr 1.4fr; gap: 16px; margin-bottom: 24px; }
@@ -311,8 +336,8 @@ td.empty { text-align: center; color: var(--muted); padding: 28px; }
   padding: 12px 18px; border-radius: var(--radius); font-size: 13px;
   margin-bottom: 16px; line-height: 1.5;
 }
-.enrich-banner.success { background: rgba(34,197,94,.12); border: 1px solid rgba(34,197,94,.3); color: #86efac; }
-.enrich-banner.warn    { background: rgba(245,158,11,.12); border: 1px solid rgba(245,158,11,.3); color: #fcd34d; }
+.enrich-banner.success { background: rgba(14,211,128,.12); border: 1px solid rgba(14,211,128,.35); color: #0a8f57; }
+.enrich-banner.warn    { background: rgba(232,164,0,.12);  border: 1px solid rgba(232,164,0,.35);  color: #9a6c00; }
 
 /* ══════════════════════════════════════════════════════════════════════════
    HUBSPOT PULL
@@ -598,32 +623,6 @@ td.empty { text-align: center; color: var(--muted); padding: 28px; }
   margin-bottom: 20px;
 }
 
-.source-tabs {
-  display: flex;
-  gap: 4px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 4px;
-}
-
-.source-tab {
-  padding: 7px 16px;
-  border-radius: 6px;
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all .15s;
-}
-.source-tab:hover { color: var(--text); }
-.source-tab.source-tab-active {
-  background: var(--blue);
-  color: #fff;
-}
-
 /* ── Sync panel ─────────────────────────────────────────────────────────── */
 .sync-panel {
   display: flex;
@@ -685,11 +684,6 @@ td.empty { text-align: center; color: var(--muted); padding: 28px; }
   align-items: center;
   gap: 6px;
 }
-
-/* ── Extra card colours ─────────────────────────────────────────────────── */
-.card-orange { border-top-color: #f97316; }
-.card-teal   { border-top-color: #14b8a6; }
-.card-indigo { border-top-color: #6366f1; }
 
 /* ── 7-card row ─────────────────────────────────────────────────────────── */
 .cards-row-7 {
@@ -877,9 +871,9 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 /* Better select dropdowns */
 .filter-select, select.admin-input {
-  color-scheme: dark;
+  color-scheme: light;
   appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='%238892aa'%3E%3Cpath d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='%23707070'%3E%3Cpath d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 12px center;
   padding-right: 32px;

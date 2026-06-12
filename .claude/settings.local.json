@@ -37,7 +37,23 @@
       "Bash(gh auth:*)",
       "Bash(grep -r \"AUTH_PASSWORD\\\\|CloudFuze@2026\\\\|SESSION_SECRET\" 'C:\\\\Users\\\\SatyaPinniti\\\\OneDrive - CloudFuze, Inc\\\\Desktop\\\\ICP SCORE' --include=*.js)",
       "Bash(git remote *)",
-      "PowerShell(git *)"
+      "PowerShell(git *)",
+      "Bash(node --check \"public/app.js\")",
+      "Bash(node --check \"src/hubspot.js\")",
+      "Bash(node --check \"src/routes.js\")",
+      "Bash(node --check \"src/config.js\")",
+      "PowerShell($c = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue; if \\($c\\) { Stop-Process -Id $c.OwningProcess -Force; \"Stopped PID $\\($c.OwningProcess\\)\" } else { \"No process on port 3000\" })",
+      "Bash(node --check \"src/db.js\")",
+      "PowerShell($c = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue; if \\($c\\) { Stop-Process -Id $c.OwningProcess -Force })",
+      "PowerShell($c = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue; if \\($c\\) { Stop-Process -Id $c.OwningProcess -Force; \"Stopped\" } else { \"none\" })",
+      "Bash(node -e ' *)",
+      "PowerShell($c = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue; if \\($c\\) { \"Server running \\(PID $\\($c.OwningProcess\\)\\)\" } else { \"NOT running\" })",
+      "Bash(xxd)",
+      "Bash(mkdir -p .brandtmp)",
+      "Bash(unzip -o cloudfuze-brand-guidelines.skill -d .brandtmp)",
+      "Bash(rm -rf .brandtmp)",
+      "Bash(node --check public/app.js)",
+      "PowerShell($c = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue; if \\($c\\) { Stop-Process -Id $c.OwningProcess -Force; \"stopped\" } else { \"none\" })"
     ]
   }
 }
