@@ -1,17 +1,39 @@
+# Render Blueprint for the CloudFuze ICP Score app
+# Docs: https://render.com/docs/blueprint-spec
 services:
   - type: web
     name: icp-score
     runtime: node
-    plan: free
+    # "starter" (paid) is required for the persistent disk below.
+    # For the FREE tier: change this to "free" AND delete the `disk:` block —
+    # the SQLite cache then resets on every deploy/restart (re-run Sync after).
+    plan: starter
+    region: oregon
+    branch: main
     buildCommand: npm install
     startCommand: node server.js
+    healthCheckPath: /login
+    autoDeploy: true
     envVars:
       - key: NODE_ENV
         value: production
+      # Pin Node to match local development
+      - key: NODE_VERSION
+        value: 22.17.0
+      # Auto-generated random session secret
+      - key: SESSION_SECRET
+        generateValue: true
+      # Secrets — set these in the Render dashboard (never committed to git)
+      - key: AUTH_USERNAME
+        sync: false
+      - key: AUTH_PASSWORD
+        sync: false
       - key: HUBSPOT_ACCESS_TOKEN
         sync: false
+      # Optional — only needed if you re-enable HubSpot Pull / Apollo enrichment
       - key: APOLLO_API_KEY
         sync: false
+    # Persistent disk so the SQLite cache (data/icp-cache.db) survives deploys.
     disk:
       name: icp-data
       mountPath: /opt/render/project/src/data
