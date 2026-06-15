@@ -107,14 +107,7 @@
     <div class="table-box">
       <div class="table-box-header">
         <h3>High-Priority Leads</h3>
-        <select id="prioritySegmentFilter" class="filter-select" onchange="filterPriorityLeads()" style="width:180px">
-          <option value="">All Segments</option>
-          <option value="SMB">SMB</option>
-          <option value="MSP">MSP</option>
-          <option value="Large MSP">Large MSP</option>
-          <option value="Enterprise">Enterprise</option>
-          <option value="Others">Others</option>
-        </select>
+        <span style="color:#707070;font-size:12px">Use the dropdowns under each column to filter ↓</span>
       </div>
       <div class="table-scroll">
         <table><thead><tr>
@@ -138,17 +131,10 @@
     <!-- Top bar: filters -->
     <div class="rep-top-bar">
       <div class="rep-filters">
-        <select class="filter-select" id="repFilterPeriod" onchange="onRepPeriodChange()">
-          <option value="all" selected>All Time</option>
-          <option value="this_week">This Week</option>
-          <option value="this_month">This Month</option>
-          <option value="last_3months">Last 3 Months</option>
-          <option value="custom">Custom Range</option>
-        </select>
-        <div class="rep-custom-dates hidden" id="repCustomDates">
-          <input type="date" class="admin-input" id="repDateFrom" style="width:140px" />
+        <div class="rep-custom-dates" id="repCustomDates" title="Filter by contact Create Date">
+          <input type="date" class="admin-input" id="repDateFrom" style="width:150px" title="From (Create Date)" />
           <span style="color:#707070;padding:0 4px">→</span>
-          <input type="date" class="admin-input" id="repDateTo" style="width:140px" />
+          <input type="date" class="admin-input" id="repDateTo" style="width:150px" title="To (Create Date)" />
           <button class="btn btn-primary" onclick="loadRepTracker()">Apply</button>
         </div>
         <select class="filter-select" id="repFilterTeam" onchange="loadRepTracker()">
@@ -488,23 +474,11 @@
   <section class="view" id="view-contacts">
     <div class="toolbar" style="flex-wrap:wrap;gap:8px">
       <input class="search-input" id="contactSearch" placeholder="Search by name or email…" />
-      <select class="filter-select" id="filterCategory">
-        <option value="">All Categories</option>
-        <option>Core ICP</option><option>Strong ICP</option>
-        <option>Moderate ICP</option><option>Non ICP</option>
-      </select>
-      <select class="filter-select" id="filterSegment">
-        <option value="">All Segments</option>
-        <option value="SMB">SMB</option>
-        <option value="MSP">MSP</option>
-        <option value="Large MSP">Large MSP</option>
-        <option value="Enterprise">Enterprise</option>
-        <option value="Others">Others</option>
-      </select>
-      <input type="date" class="admin-input" id="filterDateFrom" style="width:140px" title="From date" />
+      <input type="date" class="admin-input" id="filterDateFrom" style="width:140px" title="From date (Create Date)" />
       <span style="color:#707070;font-size:13px">→</span>
-      <input type="date" class="admin-input" id="filterDateTo" style="width:140px" title="To date" />
+      <input type="date" class="admin-input" id="filterDateTo" style="width:140px" title="To date (Create Date)" />
       <button class="btn btn-secondary" onclick="filterContacts()">Apply</button>
+      <span style="color:#707070;font-size:12px;align-self:center">Use the dropdowns under each column to filter ↓</span>
     </div>
     <div class="table-box">
       <div class="table-scroll">

@@ -1,10 +1,11 @@
 const hubspot = require('@hubspot/api-client');
-const { CONTACT_PROPERTIES, COMPANY_PROPERTIES, MANDATORY_LEAD_SOURCES, MANDATORY_TEAM_NAMES, getLastQuarterRange } = require('./config');
+const { CONTACT_PROPERTIES, COMPANY_PROPERTIES, MANDATORY_LEAD_SOURCES, MANDATORY_TEAM_NAMES, MANDATORY_MQL_TYPES, getLastQuarterRange } = require('./config');
 
-// Dynamically include SELECT_COUNTRY_FIELD if set
+// Always fetch the "select_country" field (overridable via SELECT_COUNTRY_FIELD)
+// so geography scoring can prefer it over the standard country/region field.
 function getContactProperties() {
   const props = [...CONTACT_PROPERTIES];
-  const extra = process.env.SELECT_COUNTRY_FIELD;
+  const extra = process.env.SELECT_COUNTRY_FIELD || 'select_country';
   if (extra && !props.includes(extra)) props.push(extra);
   return props;
 }
@@ -313,6 +314,7 @@ async function searchContactsAdvanced({
   leadSources      = [],
   hubspotTeams     = [],
   mqlType,
+  mqlTypes         = [],
   ownerIds         = [],
   teamId,
   ownerAssignedFrom,
@@ -380,8 +382,12 @@ async function searchContactsAdvanced({
     filters.push({ propertyName: 'lifecyclestage', operator: 'EQ', value: lifecycleStage });
   }
 
-  // MQL type custom property
-  if (mqlType) {
+  // MQL type custom property (single value or list)
+  if (mqlTypes.length === 1) {
+    filters.push({ propertyName: 'mql_type', operator: 'EQ', value: mqlTypes[0] });
+  } else if (mqlTypes.length > 1) {
+    filters.push({ propertyName: 'mql_type', operator: 'IN', values: mqlTypes });
+  } else if (mqlType) {
     filters.push({ propertyName: 'mql_type', operator: 'EQ', value: mqlType });
   }
 
@@ -472,12 +478,14 @@ async function pullMandatoryContacts(extraFilters = {}) {
   const { fieldName, values: teamIds } = await resolveTeamFilterValues(MANDATORY_TEAM_NAMES);
   console.log(`[pullMandatoryContacts] lead_source IN [${MANDATORY_LEAD_SOURCES.join(', ')}]`);
   console.log(`[pullMandatoryContacts] ${fieldName} IN [${teamIds.join(', ')}] (teams: ${MANDATORY_TEAM_NAMES.join(', ')})`);
+  console.log(`[pullMandatoryContacts] mql_type IN [${MANDATORY_MQL_TYPES.join(', ')}]`);
   console.log(`[pullMandatoryContacts] createdate range: ${dateFrom || '(open)'} → ${dateTo || '(open)'}`);
 
   return searchContactsAdvanced({
     ...extraFilters,
     leadSources:  MANDATORY_LEAD_SOURCES,
     hubspotTeams: MANDATORY_TEAM_NAMES,
+    mqlTypes:     MANDATORY_MQL_TYPES,
     dateFrom,
     dateTo
   });

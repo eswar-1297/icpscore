@@ -4,10 +4,10 @@ services:
   - type: web
     name: icp-score
     runtime: node
-    # "starter" (paid) is required for the persistent disk below.
-    # For the FREE tier: change this to "free" AND delete the `disk:` block —
-    # the SQLite cache then resets on every deploy/restart (re-run Sync after).
-    plan: starter
+    # Free tier: no persistent disk, so the SQLite cache (data/icp-cache.db)
+    # resets on every deploy/restart and after ~15 min idle. Re-run Sync Now
+    # after the app wakes/redeploys to repopulate it.
+    plan: free
     region: oregon
     branch: main
     buildCommand: npm install
@@ -33,8 +33,3 @@ services:
       # Optional — only needed if you re-enable HubSpot Pull / Apollo enrichment
       - key: APOLLO_API_KEY
         sync: false
-    # Persistent disk so the SQLite cache (data/icp-cache.db) survives deploys.
-    disk:
-      name: icp-data
-      mountPath: /opt/render/project/src/data
-      sizeGB: 1

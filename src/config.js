@@ -1,14 +1,21 @@
 // ─── Mandatory HubSpot pull filters (business requirement) ───────────────────
-// Only contacts matching BOTH conditions are pulled from HubSpot:
-//   Lead Source IN MANDATORY_LEAD_SOURCES  AND  Owner's team IN MANDATORY_TEAM_NAMES
+// Only contacts matching ALL conditions are pulled from HubSpot:
+//   Lead Source IN MANDATORY_LEAD_SOURCES
+//   AND Owner's team IN MANDATORY_TEAM_NAMES
+//   AND MQL Type IN MANDATORY_MQL_TYPES
+//   AND Create date within the selected From/To range
 const MANDATORY_LEAD_SOURCES = [
   'Manage', 'Manage and Migrate', 'Web_Pricing', 'Chat', 'Email',
-  'Web Contact Form', 'Webapp_Pricing', 'Multi channel',
-  'CF Manage Web_Pricing', 'Migrate', 'Contact'
+  'Web Contact Form', 'Webapp_Pricing', 'Multi channel', 'Migrate',
+  'Personal Web_Pricing', 'Contact', 'Free Consultation'
 ];
 
 const MANDATORY_TEAM_NAMES = [
   'Account Management Team', 'Large MSP/Enterprise', 'SMB Team'
+];
+
+const MANDATORY_MQL_TYPES = [
+  'Business MQL'
 ];
 
 // Returns { dateFrom, dateTo } for the previous calendar quarter.
@@ -151,6 +158,7 @@ const CATEGORIES = [
 module.exports = {
   MANDATORY_LEAD_SOURCES,
   MANDATORY_TEAM_NAMES,
+  MANDATORY_MQL_TYPES,
   getLastQuarterRange,
   CONTACT_PROPERTIES,
   COMPANY_PROPERTIES,

@@ -76,6 +76,98 @@ function formatDateTime(iso) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+// "Source → Destination" key for a lead/contact row (camelCase or snake_case).
+function srcDestKey(r) {
+  const src  = r.sourceCloud || r.source_cloud || '—';
+  const dest = r.destinationCloud || r.typeOfDestination || r.type_of_destination || r.destination_cloud || '—';
+  return `${src || '—'} → ${dest || '—'}`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Per-column dropdown filters (reusable across the lead tables)
+// ══════════════════════════════════════════════════════════════════════════════
+//  cols: { [columnIndex]: { get(row) -> value } }  — only these columns get a dropdown.
+//  getAll(): full data array. render(rows): renders the (filtered) rows.
+//  extra(row): optional extra predicate (e.g. search box / date range).
+function installColumnFilters({ thead, ncols, cols, getAll, render, extra }) {
+  const row = document.createElement('tr');
+  row.className = 'col-filter-row';
+  const sels = {};
+  for (let i = 0; i < ncols; i++) {
+    const th = document.createElement('th');
+    if (cols[i]) {
+      const sel = document.createElement('select');
+      sel.className = 'col-filter';
+      sel.innerHTML = '<option value="">All</option>';
+      sel.addEventListener('change', apply);
+      th.appendChild(sel);
+      sels[i] = sel;
+    }
+    row.appendChild(th);
+  }
+  thead.appendChild(row);
+
+  function refresh() {
+    const all = getAll() || [];
+    for (const i in sels) {
+      const sel = sels[i];
+      const cur = sel.value;
+      const vals = [...new Set(all
+        .map(r => cols[i].get(r))
+        .filter(v => v != null && String(v).trim() !== '' && v !== '—' && !String(v).startsWith('— →')))]
+        .sort((a, b) => String(a).localeCompare(String(b)));
+      sel.innerHTML = '<option value="">All</option>' +
+        vals.map(v => `<option value="${escHtml(v)}">${escHtml(v)}</option>`).join('');
+      sel.value = vals.includes(cur) ? cur : '';
+    }
+  }
+
+  function apply() {
+    const all = getAll() || [];
+    const filtered = all.filter(r => {
+      for (const i in sels) {
+        const want = sels[i].value;
+        if (want && String(cols[i].get(r) ?? '') !== want) return false;
+      }
+      return extra ? extra(r) : true;
+    });
+    render(filtered);
+  }
+
+  return { refresh, apply };
+}
+
+// ── Scoring tiers (so column filters bucket by the SAME tiers used in scoring) ──
+let scoringCfg = null;
+const TIER_LABELS = {
+  industry:   { tier1: 'IT / Software', tier2: 'Finance / Health', tier3: 'Education', other: 'Other', none: 'Not detected' },
+  technology: { tier1: 'Google / Microsoft', tier2: 'Dropbox / Box / Egnyte…', tier3: 'Not provided', none: 'Unsupported' },
+  buyerFit:   { tier1: 'C-Level / IT Leadership', tier2: 'IT Manager / Admin', tier3: 'Consultant', other: 'Non-IT role', none: 'No title' },
+};
+
+async function loadScoringConfig() {
+  if (scoringCfg) return scoringCfg;
+  try { const d = await apiFetch('/admin/config'); scoringCfg = d.config; } catch (_) {}
+  return scoringCfg;
+}
+
+// Map a lead's per-dimension breakdown SCORE to its scoring-tier label.
+function tierLabelFor(dim, score) {
+  if (score == null) return '—';
+  const cfg = scoringCfg;
+  if (!cfg) return String(score);
+  if (dim === 'companySize') {
+    const t = (cfg.companySize || []).find(t => t.score === score);
+    return t ? t.label : (score === 0 ? 'Unknown / Empty' : `${score} pts`);
+  }
+  const labels = TIER_LABELS[dim], sec = cfg[dim];
+  if (labels && sec) {
+    const matches = Object.keys(labels).filter(k => sec[k] && sec[k].score === score).map(k => labels[k]);
+    if (matches.length) return [...new Set(matches)].join(' / ');
+  }
+  return score === 0 ? 'None' : `${score} pts`;
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 //  Navigation
 // ══════════════════════════════════════════════════════════════════════════════
@@ -210,6 +302,7 @@ async function syncHubspot() {
 
 async function loadDashboard() {
   try {
+    await loadScoringConfig();   // for tier-bucketed column filters
     const data = await apiFetch('/dashboard');
     document.getElementById('statTotal').textContent  = data.total;
     document.getElementById('statCore').textContent     = data.categoryCount['Core ICP']     || 0;
@@ -285,26 +378,32 @@ function renderGeoChart(counts) {
 
 let allHighPriorityLeads = [];
 
+let priorityColFilters = null;
+
+function setupPriorityFilters() {
+  if (priorityColFilters) return;
+  const thead = document.querySelector('#view-dashboard .table-box table thead');
+  priorityColFilters = installColumnFilters({
+    thead, ncols: 11,
+    cols: {
+      1:  { get: l => l.segment },
+      2:  { get: l => tierLabelFor('buyerFit',    l.breakdown?.buyerFit) },
+      3:  { get: l => tierLabelFor('companySize', l.breakdown?.companySize) },
+      4:  { get: l => l.countryCanon || l.country },
+      5:  { get: l => tierLabelFor('industry',    l.breakdown?.industry) },
+      6:  { get: l => tierLabelFor('technology',  l.breakdown?.technology) },
+      9:  { get: l => l.category },
+      10: { get: l => l.priority },
+    },
+    getAll: () => allHighPriorityLeads,
+    render: renderPriorityTable,
+  });
+}
+
 function filterPriorityLeads() {
-  const seg = document.getElementById('prioritySegmentFilter')?.value || '';
-
-  // Also populate the dropdown with any dynamic segments from the data
-  const dropdown = document.getElementById('prioritySegmentFilter');
-  if (dropdown && allHighPriorityLeads.length) {
-    const known = ['SMB', 'MSP', 'Large MSP', 'Enterprise', 'Others'];
-    const extra = [...new Set(allHighPriorityLeads.map(l => l.segment))].filter(s => s && !known.includes(s)).sort();
-    const current = [...dropdown.options].map(o => o.value);
-    extra.forEach(s => {
-      if (!current.includes(s)) {
-        const opt = document.createElement('option');
-        opt.value = s; opt.textContent = s;
-        dropdown.appendChild(opt);
-      }
-    });
-  }
-
-  const filtered = seg ? allHighPriorityLeads.filter(l => l.segment === seg) : allHighPriorityLeads;
-  renderPriorityTable(filtered);
+  setupPriorityFilters();
+  priorityColFilters.refresh();
+  priorityColFilters.apply();
 }
 
 let priorityRendered = [];
@@ -331,37 +430,12 @@ function renderPriorityTable(leads) {
 let allReps  = [];
 let allTeams = [];
 
-function onRepPeriodChange() {
-  const period = document.getElementById('repFilterPeriod').value;
-  document.getElementById('repCustomDates').classList.toggle('hidden', period !== 'custom');
-  if (period !== 'custom') loadRepTracker();
-}
-
-/** Compute { dateFrom, dateTo } strings from the period dropdown */
+/** Create-date range for the Rep Tracker, read straight from the From/To inputs.
+ *  Empty inputs → no date filter (all contacts). */
 function getRepDateRange() {
-  const period = document.getElementById('repFilterPeriod').value;
-  const now    = new Date();
-
-  if (period === 'custom') {
-    return {
-      dateFrom: document.getElementById('repDateFrom').value || undefined,
-      dateTo:   document.getElementById('repDateTo').value   || undefined
-    };
-  }
-  if (period === 'all') return {};
-
-  const from = new Date(now);
-  if (period === 'this_week') {
-    from.setDate(now.getDate() - 7);
-  } else if (period === 'this_month') {
-    from.setDate(1); from.setHours(0, 0, 0, 0);
-  } else if (period === 'last_3months') {
-    from.setMonth(now.getMonth() - 3);
-    from.setDate(1); from.setHours(0, 0, 0, 0);
-  }
   return {
-    dateFrom: from.toISOString().split('T')[0],
-    dateTo:   now.toISOString().split('T')[0]
+    dateFrom: document.getElementById('repDateFrom')?.value || undefined,
+    dateTo:   document.getElementById('repDateTo')?.value   || undefined
   };
 }
 
@@ -462,7 +536,10 @@ async function loadHubspotRepStats() {
     renderScoreDistChart(data.scoreRanges);
     renderRepLeaderboard(ownerBreakdown, true);
     renderTeamBreakdownHS(ownerBreakdown);
-    renderRepTopLeads(data.topLeads, true);
+    repTopLeads = data.topLeads || [];
+    setupRepTopFilters();
+    repTopColFilters.refresh();
+    repTopColFilters.apply();
 
   } catch (err) {
     showToast('Rep tracker (HubSpot) error: ' + err.message);
@@ -664,6 +741,25 @@ function renderTeamBreakdown(teams, isHubspot = false) {
   </tr>`).join('');
 }
 
+let repTopLeads = [];
+let repTopColFilters = null;
+
+function setupRepTopFilters() {
+  if (repTopColFilters) return;
+  const thead = document.getElementById('tbodyRepTopLeads').closest('table').querySelector('thead');
+  repTopColFilters = installColumnFilters({
+    thead, ncols: 8,
+    cols: {
+      3: { get: l => l.countryCanon || l.country },
+      4: { get: l => l.ownerName },
+      5: { get: l => l.leadSource },
+      7: { get: l => l.category },
+    },
+    getAll: () => repTopLeads,
+    render: rows => renderRepTopLeads(rows, true),
+  });
+}
+
 function renderRepTopLeads(leads, isHubspot = false) {
   const tbody = document.getElementById('tbodyRepTopLeads');
   if (!leads || !leads.length) {
@@ -691,6 +787,7 @@ async function viewUploadDetail(uploadId) {
     const u    = data.upload;
     switchView('pdf');
     fileLeads = u.leads;
+    await loadScoringConfig();
     renderFileResults({ total: u.leadCount, stats: u.stats, leads: u.leads });
     document.getElementById('pdfResults').classList.remove('hidden');
     showToast(`Viewing upload: ${u.filename} by ${u.repName}`);
@@ -1153,9 +1250,12 @@ async function loadContacts() {
   const tbody = document.getElementById('tbodyContacts');
   tbody.innerHTML = '<tr><td colspan="11" class="empty"><div class="spinner" style="margin:auto"></div></td></tr>';
   try {
+    await loadScoringConfig();   // needed so column filters can bucket by scoring tier
     const data  = await apiFetch('/contacts');
     allContacts = data.contacts;
-    renderContactsTable(allContacts);
+    setupContactFilters();
+    contactColFilters.refresh();
+    contactColFilters.apply();
     document.getElementById('contactsMeta').textContent = `${data.total} contacts`;
   } catch (err) { tbody.innerHTML = `<tr><td colspan="11" class="empty">Error: ${escHtml(err.message)}</td></tr>`; }
 }
@@ -1215,23 +1315,44 @@ function getContactSegment(c) {
   return (c.size_of_business && c.size_of_business.trim()) ? c.size_of_business.trim() : 'Others';
 }
 
-function filterContacts() {
-  const q       = document.getElementById('contactSearch').value.toLowerCase();
-  const cat     = document.getElementById('filterCategory').value;
-  const seg     = document.getElementById('filterSegment').value;
+// Search box + date range predicate (column dropdowns are applied by the filter helper)
+function contactSearchDate(c) {
+  const q        = (document.getElementById('contactSearch').value || '').toLowerCase();
   const dateFrom = document.getElementById('filterDateFrom').value;
   const dateTo   = document.getElementById('filterDateTo').value;
+  if (q && !(c.name||'').toLowerCase().includes(q) && !(c.email||'').toLowerCase().includes(q)) return false;
+  const created = c.create_date ? String(c.create_date).slice(0, 10) : '';
+  if (dateFrom && created && created < dateFrom) return false;
+  if (dateTo   && created && created > dateTo)   return false;
+  return true;
+}
 
-  renderContactsTable(allContacts.filter(c => {
-    if (q && !(c.name||'').toLowerCase().includes(q) && !(c.email||'').toLowerCase().includes(q)) return false;
-    if (cat && c.category !== cat) return false;
-    if (seg && getContactSegment(c) !== seg) return false;
-    // Normalize timestamps to YYYY-MM-DD so the "To" boundary is inclusive
-    const created = c.create_date ? String(c.create_date).slice(0, 10) : '';
-    if (dateFrom && created && created < dateFrom) return false;
-    if (dateTo   && created && created > dateTo)   return false;
-    return true;
-  }));
+let contactColFilters = null;
+
+function setupContactFilters() {
+  if (contactColFilters) return;
+  const thead = document.querySelector('#view-contacts table thead');
+  contactColFilters = installColumnFilters({
+    thead, ncols: 11,
+    cols: {
+      1:  { get: c => getContactSegment(c) },
+      2:  { get: c => tierLabelFor('buyerFit',    c.breakdown?.buyerFit) },     // Buyer Fit tier
+      3:  { get: c => tierLabelFor('companySize', c.breakdown?.companySize) },  // Company Size tier
+      4:  { get: c => c.countryCanon || c.country },
+      5:  { get: c => tierLabelFor('industry',    c.breakdown?.industry) },     // Industry tier
+      6:  { get: c => tierLabelFor('technology',  c.breakdown?.technology) },   // Migration tier
+      9:  { get: c => c.category },
+      10: { get: c => c.priority },
+    },
+    getAll: () => allContacts,
+    render: renderContactsTable,
+    extra: contactSearchDate,
+  });
+}
+
+function filterContacts() {
+  setupContactFilters();
+  contactColFilters.apply();
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1505,6 +1626,7 @@ async function analyzeFile(file) {
 
     progress.classList.add('hidden');
     fileLeads = data.leads;
+    await loadScoringConfig();   // for tier-bucketed column filters
     renderFileResults(data);
     results.classList.remove('hidden');
 
@@ -1613,26 +1735,58 @@ function renderFileResults(data) {
       <div class="card-value">${c.value}</div>
     </div>`).join('');
 
-  // Table
+  // Table + per-column filters
+  setupFileFilters();
+  fileColFilters.refresh();
+  fileColFilters.apply();
+}
+
+function fileSegment(l) {
+  return (l.sizeOfBusiness && String(l.sizeOfBusiness).trim()) ? String(l.sizeOfBusiness).trim() : 'Others';
+}
+
+let fileRendered = [];
+
+function renderFileTable(leads) {
   const tbody = document.getElementById('tbodyFile');
-  if (!data.leads.length) {
+  if (!leads.length) {
     tbody.innerHTML = '<tr><td colspan="11" class="empty">No leads found in this file.</td></tr>';
     return;
   }
-  tbody.innerHTML = data.leads.map((l, i) => {
-    const seg = (l.sizeOfBusiness && String(l.sizeOfBusiness).trim()) ? String(l.sizeOfBusiness).trim() : 'Others';
-    return `<tr style="cursor:pointer" onclick="showLeadDetail(fileLeads[${i}])">
+  fileRendered = leads;
+  tbody.innerHTML = leads.map((l, i) => `<tr style="cursor:pointer" onclick="showLeadDetail(fileRendered[${i}])">
     <td>
       <div style="font-weight:500;color:var(--blue-light,#0129AC)">${escHtml(l.name||'—')}</div>
       <div style="font-size:12px;color:#707070">${escHtml(l.email||'')}</div>
     </td>
-    <td style="font-size:12.5px;color:var(--muted)">${escHtml(seg)}</td>
+    <td style="font-size:12.5px;color:var(--muted)">${escHtml(fileSegment(l))}</td>
     ${scoringInputCells(l)}
     <td>${scoreBar(l.score)}</td>
     <td>${categoryBadge(l.category)}</td>
     <td>${priorityBadge(l.priority)}</td>
-  </tr>`;
-  }).join('');
+  </tr>`).join('');
+}
+
+let fileColFilters = null;
+
+function setupFileFilters() {
+  if (fileColFilters) return;
+  const thead = document.getElementById('tbodyFile').closest('table').querySelector('thead');
+  fileColFilters = installColumnFilters({
+    thead, ncols: 11,
+    cols: {
+      1:  { get: l => fileSegment(l) },
+      2:  { get: l => tierLabelFor('buyerFit',    l.breakdown?.buyerFit) },
+      3:  { get: l => tierLabelFor('companySize', l.breakdown?.companySize) },
+      4:  { get: l => l.countryCanon || l.country },
+      5:  { get: l => tierLabelFor('industry',    l.breakdown?.industry) },
+      6:  { get: l => tierLabelFor('technology',  l.breakdown?.technology) },
+      9:  { get: l => l.category },
+      10: { get: l => l.priority },
+    },
+    getAll: () => fileLeads,
+    render: renderFileTable,
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1659,8 +1813,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Contacts
   document.getElementById('contactSearch').addEventListener('input', filterContacts);
-  document.getElementById('filterCategory').addEventListener('change', filterContacts);
-  document.getElementById('filterSegment').addEventListener('change', filterContacts);
 
   // Combinations
   document.getElementById('btnComboApply').addEventListener('click', loadCombinations);
@@ -1683,8 +1835,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // HubSpot Pull
   document.getElementById('btnPullAndScore').addEventListener('click', pullAndScore);
 
-  // Rep Tracker filters
-  // Note: repFilterPeriod uses onchange="onRepPeriodChange()" in HTML — no duplicate listener here
+  // Rep Tracker filters (date inputs use the inline Apply button)
   document.getElementById('repFilterTeam').addEventListener('change', loadRepTracker);
   document.getElementById('btnManageReps').addEventListener('click', openRepModal);
 

@@ -3,6 +3,7 @@
 const Database = require('better-sqlite3');
 const path     = require('path');
 const fs       = require('fs');
+const { canonicalCountry } = require('./geography');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DB_PATH  = path.join(DATA_DIR, 'icp-cache.db');
@@ -542,7 +543,8 @@ function getDashboardStats() {
     try { breakdown = r.breakdown_json ? JSON.parse(r.breakdown_json) : null; } catch (_) {}
     return {
       id: r.hubspot_id, name: r.name, email: r.email,
-      jobTitle: r.jobtitle, country: r.country, industry: r.industry,
+      jobTitle: r.jobtitle, country: r.country, countryCanon: canonicalCountry(r.country),
+      industry: r.industry,
       numberOfEmployees: r.numberofemployees, companyName: r.company_name,
       sourceCloud: r.source_cloud,
       destinationCloud: r.destination_cloud || r.type_of_destination,
@@ -596,7 +598,7 @@ function getContactsList() {
   return rows.map(r => {
     let breakdown = null;
     try { breakdown = r.breakdown_json ? JSON.parse(r.breakdown_json) : null; } catch (_) {}
-    return { ...r, breakdown };
+    return { ...r, breakdown, countryCanon: canonicalCountry(r.country) };
   });
 }
 
@@ -811,11 +813,28 @@ function migrateFromJsonStore() {
 const SRC_EXPR  = `COALESCE(NULLIF(TRIM(source_cloud), ''), 'Unknown')`;
 const DEST_EXPR = `COALESCE(NULLIF(TRIM(type_of_destination), ''), NULLIF(TRIM(destination_cloud), ''), 'Unknown')`;
 
+// All raw DB country values that canonicalise to the given country name.
+function rawCountriesFor(canonical) {
+  const db = getDb();
+  const rows = db.prepare(
+    `SELECT DISTINCT country FROM contacts WHERE country IS NOT NULL AND TRIM(country) <> ''`
+  ).all();
+  return rows.map(r => r.country).filter(c => canonicalCountry(c) === canonical);
+}
+
 function buildCombinationWhere(filters = {}, params = {}) {
   const where = [];
   if (filters.country) {
-    where.push('LOWER(TRIM(country)) = LOWER(TRIM(@country))');
-    params.country = filters.country;
+    // Expand the canonical country (e.g. "United States") to every raw value
+    // in the data that maps to it (US, USA, California, Texas, …).
+    const raws = rawCountriesFor(filters.country);
+    if (raws.length) {
+      const ph = raws.map((_, i) => `@cc${i}`).join(',');
+      where.push(`country IN (${ph})`);
+      raws.forEach((v, i) => { params[`cc${i}`] = v; });
+    } else {
+      where.push('1 = 0');  // unknown country → no rows
+    }
   }
   if (filters.dateFrom) {
     where.push('create_date >= @dateFrom');
@@ -875,13 +894,17 @@ function getCombinationContacts(filters = {}) {
   return db.prepare(sql).all(params);
 }
 
-/** Distinct, non-empty country values for the filter dropdown. */
+/** Distinct, canonicalised country names for the filter dropdown
+ *  (US / USA / United States / state names all collapse to one entry). */
 function getDistinctCountries() {
   const db = getDb();
-  return db.prepare(
+  const raws = db.prepare(
     `SELECT DISTINCT TRIM(country) AS country FROM contacts
-     WHERE country IS NOT NULL AND TRIM(country) <> '' ORDER BY country COLLATE NOCASE`
+     WHERE country IS NOT NULL AND TRIM(country) <> ''`
   ).all().map(r => r.country);
+  const set = new Set();
+  raws.forEach(c => { const canon = canonicalCountry(c); if (canon) set.add(canon); });
+  return [...set].sort((a, b) => a.localeCompare(b));
 }
 
 module.exports = {

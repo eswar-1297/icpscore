@@ -11,6 +11,7 @@ const { enrichLeads }      = require('./apollo');
 const { loadConfig, saveConfig, getDefaultConfig } = require('./configManager');
 const rep = require('./repStore');
 const db  = require('./db');
+const { canonicalCountry } = require('./geography');
 
 // Multer — CSV / XLS / XLSX, in-memory, 20 MB max
 const ALLOWED_MIMES = new Set([
@@ -385,6 +386,7 @@ router.post('/file/analyze', upload.single('file'), async (req, res) => {
     const scoredLeads = enrichedLeads.map(lead => {
       const scored = scoreExtractedLead(lead, config);
       delete scored._enriched;
+      scored.countryCanon = canonicalCountry(scored.country);
       return scored;
     });
 
@@ -919,9 +921,11 @@ router.get('/rep-tracker/hs-stats', (req, res) => {
 
     result.allLeads = leads.map(l => ({
       name: l.name, email: l.email, jobTitle: l.jobtitle,
-      companyName: l.company_name, country: l.country,
+      companyName: l.company_name, country: l.country, countryCanon: canonicalCountry(l.country),
       score: l.icp_score, category: l.icp_category, priority: l.icp_priority,
-      leadSource: l.lead_source, destinationCloud: l.type_of_destination || l.destination_cloud,
+      leadSource: l.lead_source,
+      sourceCloud: l.source_cloud,
+      destinationCloud: l.type_of_destination || l.destination_cloud,
       ownerName: ownerMap[l.hubspot_owner_id] || null, createDate: l.create_date
     }));
 

@@ -53,7 +53,16 @@
       "Bash(unzip -o cloudfuze-brand-guidelines.skill -d .brandtmp)",
       "Bash(rm -rf .brandtmp)",
       "Bash(node --check public/app.js)",
-      "PowerShell($c = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue; if \\($c\\) { Stop-Process -Id $c.OwningProcess -Force; \"stopped\" } else { \"none\" })"
+      "PowerShell($c = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue; if \\($c\\) { Stop-Process -Id $c.OwningProcess -Force; \"stopped\" } else { \"none\" })",
+      "Bash(node --check src/config.js)",
+      "Bash(node --check src/hubspot.js)",
+      "Bash(node --check src/geography.js)",
+      "Bash(node --check src/db.js)",
+      "Bash(node -e \"const {canonicalCountry}=require\\('./src/geography'\\); ['US','usa','California','Calabasas, CA','Newberg, Oregon','West Palm Beach, Florida','NY','London','Toronto','München','México','The Netherlands','Bogotá, Cundinamarca','Austin','Gauteng','Hong Kong','Cayman Islands'].forEach\\(c=>console.log\\(c,'->',canonicalCountry\\(c\\)\\)\\)\")",
+      "Bash(node -e \"const {canonicalCountry}=require\\('./src/geography'\\); ['New York','Texas','California','new york','NY','TX'].forEach\\(c=>console.log\\(c,'->',canonicalCountry\\(c\\)\\)\\)\")",
+      "Read(//c/c/Users/SatyaPinniti/OneDrive - CloudFuze, Inc/Desktop/ICP SCORE/public/**)",
+      "Read(//c/c/Users/SatyaPinniti/OneDrive - CloudFuze, Inc/Desktop/ICP SCORE/src/**)",
+      "Bash(node --check src/routes.js)"
     ]
   }
 }
