@@ -220,7 +220,7 @@ router.post('/hubspot/pull-and-score', async (req, res) => {
         phone:             p.phone || null,
         jobTitle:          p.jobtitle || null,
         companyName:       null,
-        numberOfEmployees: parseEmployeeCount(p.numberofemployees),
+        numberOfEmployees: parseEmployeeCount(p.company_size) || parseEmployeeCount(p.numberofemployees),
         country:           p[process.env.SELECT_COUNTRY_FIELD || 'select_country'] || p.country || null,
         industry:          p.industry || null,
         techStack:         p.type_of_destination || p.destination_cloud || null,
@@ -753,7 +753,7 @@ router.post('/rep-tracker/sync', async (req, res) => {
         email:             p.email  || null,
         jobTitle:          p.jobtitle || null,
         companyName:       null,
-        numberOfEmployees: parseEmployeeCount(p.numberofemployees),
+        numberOfEmployees: parseEmployeeCount(p.company_size) || parseEmployeeCount(p.numberofemployees),
         country:           p[process.env.SELECT_COUNTRY_FIELD || 'select_country'] || p.country || null,
         industry:          p.industry || null,
         techStack:         p.type_of_destination || p.destination_cloud || null,
@@ -1037,7 +1037,7 @@ router.get('/outbound/stats', async (req, res) => {
       const country = p[process.env.SELECT_COUNTRY_FIELD || 'select_country'] || p.country || cp?.country || null;
       const lead = {
         name, email: p.email, jobTitle: p.jobtitle,
-        numberOfEmployees: parseEmployeeCount(p.numberofemployees) || parseEmployeeCount(cp?.numberofemployees),
+        numberOfEmployees: parseEmployeeCount(p.company_size) || parseEmployeeCount(p.numberofemployees) || parseEmployeeCount(cp?.numberofemployees),
         country, industry: p.industry || cp?.industry || null,
         sourceCloud: p.source__cloud || p.source_destination || null,
         destinationCloud: p.destination_cloud || p.type_of_destination || (cp ? cp[techField] : null),
@@ -1152,7 +1152,7 @@ router.post('/sync/full', async (req, res) => {
       // Score
       const lead = {
         name, email: p.email, jobTitle: p.jobtitle,
-        numberOfEmployees: parseEmployeeCount(p.numberofemployees) || companyEmployees,
+        numberOfEmployees: parseEmployeeCount(p.company_size) || parseEmployeeCount(p.numberofemployees) || companyEmployees,
         country: p[process.env.SELECT_COUNTRY_FIELD || 'select_country'] || p.country || companyCountry,
         industry: p.industry || companyIndustry,
         sourceCloud: p.source__cloud || p.source_destination || null,
@@ -1172,7 +1172,7 @@ router.post('/sync/full', async (req, res) => {
         phone:               p.phone || null,
         country:             p[process.env.SELECT_COUNTRY_FIELD || 'select_country'] || p.country || companyCountry || null,
         industry:            p.industry || companyIndustry || null,
-        numberofemployees:   parseEmployeeCount(p.numberofemployees) || companyEmployees,
+        numberofemployees:   parseEmployeeCount(p.company_size) || parseEmployeeCount(p.numberofemployees) || companyEmployees,
         company_name:        companyName,
         lifecyclestage:      p.lifecyclestage || null,
         lead_source:         p.lead_source || null,

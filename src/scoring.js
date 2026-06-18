@@ -327,7 +327,8 @@ function scoreContact(contactProps, companyProps = {}) {
   const config    = loadConfig();
   const techField = process.env.TECH_STACK_FIELD || 'technologies';
 
-  const employees   = companyProps.numberofemployees || contactProps.numberofemployees || null;
+  // Prefer the contact's "Company size" field; fall back to employee count (contact, then company)
+  const employees   = contactProps.company_size || contactProps.numberofemployees || companyProps.numberofemployees || null;
   const country     = contactProps[process.env.SELECT_COUNTRY_FIELD || 'select_country']
                    || contactProps.country || companyProps.country || null;
   const industry    = companyProps.industry || contactProps.industry || null;

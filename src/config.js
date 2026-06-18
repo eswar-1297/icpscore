@@ -56,7 +56,8 @@ const CONTACT_PROPERTIES = [
   'hs_lifecyclestage_marketingqualifiedlead_date', // MQL date
   'lifecyclestage',            // subscriber, lead, mql, sql, etc.
   'createdate',                // contact create date
-  'numberofemployees',         // contact-level employee count
+  'company_size',              // preferred company-size field (free text: "51-200", "5K+", etc.)
+  'numberofemployees',         // contact-level employee count (fallback when company_size empty)
   'industry',                  // contact-level industry
   'associatedcompanyid',
   'icp_score', 'icp_category', 'icp_priority',
