@@ -1083,13 +1083,21 @@ router.get('/outbound/stats', async (req, res) => {
 router.post('/sync/full', async (req, res) => {
   const syncId = db.startSync('contacts');
   try {
-    // 1. Sync owners
-    const owners = await hs.getOwners();
+    // 1. Sync owners — enrichment only (rep/team name mapping). Don't let a
+    //    transient HubSpot failure on /owners abort the whole contact sync;
+    //    fall back to whatever owners are already cached in the DB.
     const now = new Date().toISOString();
-    db.upsertOwners(owners.map(o => ({
-      id: o.id, name: o.name, email: o.email,
-      teams_json: JSON.stringify(o.teams), synced_at: now
-    })));
+    let owners;
+    try {
+      owners = await hs.getOwners();
+      db.upsertOwners(owners.map(o => ({
+        id: o.id, name: o.name, email: o.email,
+        teams_json: JSON.stringify(o.teams), synced_at: now
+      })));
+    } catch (ownerErr) {
+      console.warn('[sync] getOwners failed, using cached owners:', ownerErr.message);
+      owners = db.getOwners();  // {id, name, email, teams} — already parsed
+    }
 
     // 2. Sync property options
     for (const prop of ['lead_source', 'mql_type', 'type_of_destination', 'lifecyclestage']) {

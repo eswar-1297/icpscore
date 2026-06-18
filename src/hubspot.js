@@ -242,7 +242,7 @@ async function getOwners() {
     // Signature: getPage(email?, after?, limit?, archived?)
     // Passing undefined for email, use after cursor for pagination
     const res = await withRetry(
-      () => hs.crm.owners.ownersApi.getPage(undefined, after, 200, false),
+      () => hs.crm.owners.ownersApi.getPage(undefined, after, 100, false),
       { label: 'hubspot:owners' }
     );
     all.push(...(res.results || []));
