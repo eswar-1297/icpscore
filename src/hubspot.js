@@ -53,24 +53,31 @@ async function withRetry(fn, { retries = 4, baseDelay = 1000, label = 'hubspot' 
   }
 }
 
-// ─── Direct HubSpot GET (no connection pooling) ──────────────────────────────
-// The SDK reuses a keep-alive socket from a pool; in some cloud egress
-// environments (e.g. Render) HubSpot/Cloudflare half-closes idle sockets, so a
-// reused socket fails mid-stream with "Premature close" — and every immediate
-// retry grabs the same dead socket. Forcing a fresh connection per request
-// (agent:false + Connection: close) sidesteps the stale-socket problem.
-function hubspotGetJson(pathWithQuery) {
+// ─── Direct HubSpot request (no connection pooling) ──────────────────────────
+// The SDK (node-fetch) reuses a keep-alive socket from a pool; in some cloud
+// egress environments (e.g. Render) HubSpot/Cloudflare half-closes idle
+// sockets, so a reused socket fails mid-stream with "Premature close"
+// (ERR_STREAM_PREMATURE_CLOSE) — and every immediate retry grabs the same dead
+// socket. Forcing a fresh connection per request (agent:false + Connection:
+// close) sidesteps the stale-socket problem entirely.
+function hubspotRequest(method, pathWithQuery, body) {
   return new Promise((resolve, reject) => {
+    const payload = body == null ? null : Buffer.from(JSON.stringify(body));
+    const headers = {
+      Authorization: `Bearer ${process.env.HUBSPOT_ACCESS_TOKEN}`,
+      Accept: 'application/json',
+      Connection: 'close',
+    };
+    if (payload) {
+      headers['Content-Type'] = 'application/json';
+      headers['Content-Length'] = payload.length;
+    }
     const req = https.request({
       hostname: 'api.hubapi.com',
       path: pathWithQuery,
-      method: 'GET',
+      method,
       agent: false,  // brand-new socket each request — never reuse a pooled one
-      headers: {
-        Authorization: `Bearer ${process.env.HUBSPOT_ACCESS_TOKEN}`,
-        Accept: 'application/json',
-        Connection: 'close',
-      },
+      headers,
     }, (res) => {
       let data = '';
       res.setEncoding('utf8');
@@ -81,15 +88,18 @@ function hubspotGetJson(pathWithQuery) {
           err.statusCode = res.statusCode;
           return reject(err);
         }
-        try { resolve(JSON.parse(data)); }
+        try { resolve(data ? JSON.parse(data) : {}); }
         catch (e) { reject(new Error(`Invalid JSON from HubSpot (${pathWithQuery})`)); }
       });
     });
     req.on('error', reject);
-    req.setTimeout(30000, () => req.destroy(new Error('HubSpot request timed out')));
+    req.setTimeout(60000, () => req.destroy(new Error('HubSpot request timed out')));
+    if (payload) req.write(payload);
     req.end();
   });
 }
+
+const hubspotGetJson = (pathWithQuery) => hubspotRequest('GET', pathWithQuery);
 
 // ─── Fetch all contacts (paginated) ──────────────────────────────────────────
 async function getAllContacts({ dateFrom, dateTo } = {}) {
@@ -167,7 +177,6 @@ async function getCompany(companyId) {
 // Returns a Map<companyId, properties>
 async function batchGetCompanies(companyIds) {
   if (!companyIds.length) return new Map();
-  const hs = getClient();
   const techField = process.env.TECH_STACK_FIELD || 'technologies';
   const props = Array.from(new Set([...COMPANY_PROPERTIES, techField]));
   const uniqueIds = [...new Set(companyIds)];
@@ -176,14 +185,16 @@ async function batchGetCompanies(companyIds) {
   for (let i = 0; i < uniqueIds.length; i += 100) {
     const chunk = uniqueIds.slice(i, i + 100);
     try {
+      // Direct POST over a fresh connection (see hubspotRequest) — avoids the
+      // SDK's pooled-socket "Premature close" on Render.
       const res = await withRetry(
-        () => hs.crm.companies.batchApi.read({
+        () => hubspotRequest('POST', '/crm/v3/objects/companies/batch/read', {
           inputs: chunk.map(id => ({ id })),
           properties: props
         }),
         { label: 'hubspot:companies-batch' }
       );
-      for (const co of res.results) {
+      for (const co of res.results || []) {
         map.set(co.id, co.properties);
       }
     } catch (_) {}
@@ -508,7 +519,12 @@ async function searchContactsAdvanced({
 
   do {
     if (after !== undefined) searchBody.after = after;
-    const res = await hs.crm.contacts.searchApi.doSearch(searchBody);
+    // Direct POST over a fresh connection (see hubspotRequest) — the SDK's
+    // pooled socket fails here with "Premature close" on Render.
+    const res = await withRetry(
+      () => hubspotRequest('POST', '/crm/v3/objects/contacts/search', searchBody),
+      { label: 'hubspot:contacts-search' }
+    );
     contacts.push(...(res.results || []));
     after = res.paging?.next?.after;
   } while (after);
