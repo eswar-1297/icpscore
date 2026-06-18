@@ -1,5 +1,7 @@
 const hubspot = require('@hubspot/api-client');
-const { CONTACT_PROPERTIES, COMPANY_PROPERTIES, MANDATORY_LEAD_SOURCES, MANDATORY_TEAM_NAMES, MANDATORY_MQL_TYPES, getLastQuarterRange } = require('./config');
+const { CONTACT_PROPERTIES, COMPANY_PROPERTIES, MANDATORY_LEAD_SOURCES, MANDATORY_TEAM_NAMES, MANDATORY_MQL_TYPES,
+        OUTBOUND_LEAD_PROP, OUTBOUND_LEAD_VALUE, OUTBOUND_OWNER_PROP, OUTBOUND_OWNERS, getLastQuarterRange } = require('./config');
+const { etMidnightMs, nextDay } = require('./datetime');
 
 // Always fetch the "select_country" field (overridable via SELECT_COUNTRY_FIELD)
 // so geography scoring can prefer it over the standard country/region field.
@@ -7,6 +9,8 @@ function getContactProperties() {
   const props = [...CONTACT_PROPERTIES];
   const extra = process.env.SELECT_COUNTRY_FIELD || 'select_country';
   if (extra && !props.includes(extra)) props.push(extra);
+  // Outbound-leads view properties
+  [OUTBOUND_LEAD_PROP, OUTBOUND_OWNER_PROP].forEach(p => { if (p && !props.includes(p)) props.push(p); });
   return props;
 }
 
@@ -315,6 +319,8 @@ async function searchContactsAdvanced({
   hubspotTeams     = [],
   mqlType,
   mqlTypes         = [],
+  outboundLead     = false,
+  outboundOwners   = [],
   ownerIds         = [],
   teamId,
   ownerAssignedFrom,
@@ -348,16 +354,15 @@ async function searchContactsAdvanced({
       value: d.getTime().toString() });
   }
 
-  // Create date range
+  // Create date range — boundaries at Eastern-Time midnight (matches HubSpot's
+  // portal day boundaries instead of UTC).
   if (dateFrom) {
     filters.push({ propertyName: 'createdate', operator: 'GTE',
-      value: new Date(dateFrom).getTime().toString() });
+      value: String(etMidnightMs(dateFrom)) });
   }
   if (dateTo) {
-    const d = new Date(dateTo);
-    d.setDate(d.getDate() + 1);
     filters.push({ propertyName: 'createdate', operator: 'LT',
-      value: d.getTime().toString() });
+      value: String(etMidnightMs(nextDay(dateTo))) });  // < ET midnight of the day after
   }
 
   // Lead sources (custom CloudFuze property: lead_source)
@@ -380,6 +385,17 @@ async function searchContactsAdvanced({
   // Lifecycle stage
   if (lifecycleStage) {
     filters.push({ propertyName: 'lifecyclestage', operator: 'EQ', value: lifecycleStage });
+  }
+
+  // Outbound Marketing lead = Yes
+  if (outboundLead) {
+    filters.push({ propertyName: OUTBOUND_LEAD_PROP, operator: 'EQ', value: OUTBOUND_LEAD_VALUE });
+  }
+  // Outbound marketing contact owner IN [...]
+  if (outboundOwners.length === 1) {
+    filters.push({ propertyName: OUTBOUND_OWNER_PROP, operator: 'EQ', value: outboundOwners[0] });
+  } else if (outboundOwners.length > 1) {
+    filters.push({ propertyName: OUTBOUND_OWNER_PROP, operator: 'IN', values: outboundOwners });
   }
 
   // MQL type custom property (single value or list)
@@ -491,6 +507,19 @@ async function pullMandatoryContacts(extraFilters = {}) {
   });
 }
 
+// ─── Outbound Leads pull: Outbound Marketing lead = Yes AND owner IN [...] ────
+async function pullOutboundContacts({ dateFrom, dateTo } = {}) {
+  if (!dateFrom && !dateTo) ({ dateFrom, dateTo } = getLastQuarterRange());
+  console.log(`[pullOutboundContacts] ${OUTBOUND_LEAD_PROP}=${OUTBOUND_LEAD_VALUE} AND ${OUTBOUND_OWNER_PROP} IN [${OUTBOUND_OWNERS.join(', ')}]`);
+  console.log(`[pullOutboundContacts] createdate range: ${dateFrom || '(open)'} → ${dateTo || '(open)'}`);
+  return searchContactsAdvanced({
+    outboundLead:   true,
+    outboundOwners: OUTBOUND_OWNERS,
+    dateFrom,
+    dateTo
+  });
+}
+
 module.exports = {
   getClient,
   getAllContacts,
@@ -508,6 +537,7 @@ module.exports = {
   getDashboardData,
   resolveTeamFilterValues,
   pullMandatoryContacts,
+  pullOutboundContacts,
   MANDATORY_LEAD_SOURCES,
   MANDATORY_TEAM_NAMES
 };

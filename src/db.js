@@ -246,6 +246,10 @@ function getAllContacts(filters = {}) {
     where.push('icp_category = @category');
     params.category = filters.category;
   }
+  if (filters.segment) {
+    where.push('TRIM(size_of_business) = @segment');
+    params.segment = filters.segment;
+  }
 
   const whereClause = where.length ? 'WHERE ' + where.join(' AND ') : '';
   const sql = `SELECT * FROM contacts ${whereClause} ORDER BY create_date DESC`;
@@ -622,6 +626,10 @@ function getRepStats(filters = {}) {
   if (filters.dateTo) {
     where.push('create_date <= @dateTo');
     params.dateTo = filters.dateTo;
+  }
+  if (filters.segment) {
+    where.push('TRIM(size_of_business) = @segment');
+    params.segment = filters.segment;
   }
 
   const whereClause = where.length ? 'WHERE ' + where.join(' AND ') : '';

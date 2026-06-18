@@ -89,7 +89,66 @@ function srcDestKey(r) {
 //  cols: { [columnIndex]: { get(row) -> value } }  — only these columns get a dropdown.
 //  getAll(): full data array. render(rows): renders the (filtered) rows.
 //  extra(row): optional extra predicate (e.g. search box / date range).
-function installColumnFilters({ thead, ncols, cols, getAll, render, extra }) {
+//  count: { id, noun } — element to show "Showing X of Y <noun>".
+
+// Show a row count: "N <noun>" when unfiltered, "Showing X of Y <noun>" when filtered.
+function updateTableCount(id, shown, total, noun = 'rows') {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = (shown === total)
+    ? `${total} ${noun}`
+    : `Showing ${shown} of ${total} ${noun}`;
+}
+
+// ── CSV export (shared) ───────────────────────────────────────────────────────
+function csvCell(v) { return `"${String(v ?? '').replace(/"/g, '""')}"`; }
+
+// Date-range + timestamp lines placed at the TOP of every exported CSV.
+// Reads the table's own date inputs, falling back to the top-bar sync range.
+function csvDateMeta(fromId, toId) {
+  const from = (fromId && document.getElementById(fromId)?.value) || document.getElementById('syncDateFrom')?.value || '';
+  const to   = (toId   && document.getElementById(toId)?.value)   || document.getElementById('syncDateTo')?.value   || '';
+  const lines = [['CloudFuze ICP Score — Export']];
+  lines.push(['Date Range', from || 'start', 'to', to || 'now']);
+  lines.push(['Exported', new Date().toLocaleString()]);
+  return lines;
+}
+
+// Download the whole current page as a PDF via the browser's print-to-PDF.
+function downloadPagePdf() {
+  const view = document.querySelector('.view.active');
+  const title = document.getElementById('pageTitle')?.textContent || 'ICP Score';
+  const from = document.getElementById('syncDateFrom')?.value || '';
+  const to   = document.getElementById('syncDateTo')?.value   || '';
+  const header = document.getElementById('printHeader');
+  if (header) {
+    header.innerHTML = `<h2>CloudFuze ICP Score — ${escHtml(title)}</h2>` +
+      `<div>${(from || to) ? `Date range: ${escHtml(from || 'start')} → ${escHtml(to || 'now')} · ` : ''}` +
+      `Generated ${new Date().toLocaleString()}</div>`;
+  }
+  const prevTitle = document.title;
+  document.title = `CloudFuze ICP - ${title} - ${new Date().toISOString().slice(0, 10)}`;
+  const restore = () => { document.title = prevTitle; window.removeEventListener('afterprint', restore); };
+  window.addEventListener('afterprint', restore);
+  window.print();
+}
+
+function exportCsv(filename, headers, rows, metaLines = []) {
+  if (!rows || !rows.length) { showToast('No data to export'); return; }
+  const out = [];
+  metaLines.forEach(m => out.push(m.map(csvCell).join(',')));
+  if (metaLines.length) out.push('');                 // blank line before the table
+  out.push(headers.map(csvCell).join(','));
+  rows.forEach(r => out.push(r.map(csvCell).join(',')));
+  const blob = new Blob([out.join('\n')], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+  showToast('CSV downloaded');
+}
+
+function installColumnFilters({ thead, ncols, cols, getAll, render, extra, count }) {
   const row = document.createElement('tr');
   row.className = 'col-filter-row';
   const sels = {};
@@ -132,6 +191,7 @@ function installColumnFilters({ thead, ncols, cols, getAll, render, extra }) {
       return extra ? extra(r) : true;
     });
     render(filtered);
+    if (count) updateTableCount(count.id, filtered.length, all.length, count.noun);
   }
 
   return { refresh, apply };
@@ -180,7 +240,7 @@ function switchView(view) {
 
   const titles = {
     dashboard:'Dashboard', 'rep-tracker':'Rep Tracker', 'hubspot-pull':'HubSpot Pull',
-    pdf:'File Upload', contacts:'Contacts', combinations:'Combinations'
+    pdf:'File Upload', contacts:'Contacts', combinations:'Combinations', outbound:'Outbound Leads'
   };
   document.getElementById('pageTitle').textContent = titles[view] || 'ICP Score';
 
@@ -191,6 +251,7 @@ function switchView(view) {
   if (view === 'hubspot-pull')   loadHubspotPullView();
   if (view === 'pdf')            loadRepSelectorsForUpload();
   if (view === 'combinations')   loadCombinations();
+  if (view === 'outbound')       initOutboundView();
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -317,8 +378,8 @@ async function loadDashboard() {
   } catch (err) { showToast('Dashboard error: ' + err.message); }
 }
 
-function renderSegmentCards(segs) {
-  const container = document.getElementById('segmentCardsRow');
+function renderSegmentCards(segs, containerId = 'segmentCardsRow') {
+  const container = document.getElementById(containerId);
   if (!segs || !Object.keys(segs).length) {
     container.innerHTML = '<p style="color:var(--muted);font-size:13px">No segment data — run a sync first.</p>';
     return;
@@ -397,6 +458,7 @@ function setupPriorityFilters() {
     },
     getAll: () => allHighPriorityLeads,
     render: renderPriorityTable,
+    count: { id: 'priorityCount', noun: 'leads' },
   });
 }
 
@@ -408,10 +470,26 @@ function filterPriorityLeads() {
 
 let priorityRendered = [];
 
+function exportPriorityCSV() {
+  const headers = ['Name','Email','Segment','Job Title','Employees','Country','Industry',
+    'Source Cloud','Destination Cloud','Score','Size Score','Geo Score','Industry Score',
+    'Migration Score','Buyer Score','Category','Priority'];
+  const rows = priorityRendered.map(l => [
+    l.name || '', l.email || '', l.segment || '', l.jobTitle || '',
+    l.numberOfEmployees || '', l.country || '', l.industry || '',
+    l.sourceCloud || '', l.destinationCloud || l.typeOfDestination || '',
+    l.score ?? '',
+    l.breakdown?.companySize ?? '', l.breakdown?.geography ?? '', l.breakdown?.industry ?? '',
+    l.breakdown?.technology ?? '', l.breakdown?.buyerFit ?? '',
+    l.category || '', l.priority || ''
+  ]);
+  exportCsv('high_priority_leads.csv', headers, rows, csvDateMeta());
+}
+
 function renderPriorityTable(leads) {
   const tbody = document.getElementById('tbodyPriority');
-  if (!leads.length) { tbody.innerHTML = '<tr><td colspan="11" class="empty">No high-priority leads for this segment.</td></tr>'; return; }
   priorityRendered = leads;
+  if (!leads.length) { tbody.innerHTML = '<tr><td colspan="11" class="empty">No high-priority leads for this segment.</td></tr>'; return; }
   tbody.innerHTML = leads.map((l, i) => `<tr style="cursor:pointer" onclick="showLeadDetail(priorityRendered[${i}])">
     <td><div style="font-weight:500;color:var(--blue-light,#0129AC)">${escHtml(l.name)}</div><div style="font-size:12px;color:#707070">${escHtml(l.email||'')}</div></td>
     <td style="font-size:12.5px;color:var(--muted)">${escHtml(l.segment||'—')}</td>
@@ -459,7 +537,6 @@ function populateRepFilters(useHubspot = false) {
       allTeams.map(t => `<option value="${t.id}">${escHtml(t.name)}</option>`).join('');
   }
   teamSel.value = curTeam;
-
 }
 
 async function loadRepSelectorsForUpload() {
@@ -673,8 +750,44 @@ function renderScoreDistChart(scoreRanges) {
   });
 }
 
+let repLeaderboardRows = [];
+let teamBreakdownRows = [];
+let repTopRendered = [];
+
+function exportLeaderboardCSV() {
+  const headers = ['Rep / Owner','Team','Total Leads','Avg ICP Score','Core ICP','Strong ICP','Moderate ICP','Non ICP'];
+  const rows = repLeaderboardRows.map(r => [
+    r.ownerName || r.repName || '', r.ownerTeams || r.teamName || '',
+    r.totalLeads ?? '', r.avgScore ?? '',
+    r.categories?.['Core ICP'] || 0, r.categories?.['Strong ICP'] || 0,
+    r.categories?.['Moderate ICP'] || 0, r.categories?.['Non ICP'] || 0
+  ]);
+  exportCsv('rep_leaderboard.csv', headers, rows, csvDateMeta('repDateFrom', 'repDateTo'));
+}
+
+function exportTeamCSV() {
+  const headers = ['Team','Reps','Total Leads','Avg ICP','Core ICP','Strong ICP','Moderate ICP','Non ICP'];
+  const rows = teamBreakdownRows.map(t => [
+    t.teamName || '', t.repCount ?? '', t.totalLeads ?? '', t.avgScore ?? '',
+    t.categories?.['Core ICP'] || 0, t.categories?.['Strong ICP'] || 0,
+    t.categories?.['Moderate ICP'] || 0, t.categories?.['Non ICP'] || 0
+  ]);
+  exportCsv('team_breakdown.csv', headers, rows, csvDateMeta('repDateFrom', 'repDateTo'));
+}
+
+function exportRepTopCSV() {
+  const headers = ['Name','Email','Company','Job Title','Country','Owner','Lead Source','Score','Category'];
+  const rows = repTopRendered.map(l => [
+    l.name || '', l.email || '', l.companyName || '', l.jobTitle || '', l.country || '',
+    l.ownerName || '', l.leadSource || '', l.score ?? '', l.category || ''
+  ]);
+  exportCsv('rep_top_leads.csv', headers, rows, csvDateMeta('repDateFrom', 'repDateTo'));
+}
+
 function renderRepLeaderboard(reps, isHubspot = false) {
   const tbody = document.getElementById('tbodyRepLeaderboard');
+  repLeaderboardRows = reps || [];
+  updateTableCount('repLeaderboardCount', (reps || []).length, (reps || []).length, 'reps');
   if (!reps || !reps.length) {
     tbody.innerHTML = `<tr><td colspan="8" class="empty">${isHubspot ? 'No data. Run a sync from the Dashboard.' : 'No data yet. Upload files with a rep selected.'}</td></tr>`;
     return;
@@ -725,6 +838,8 @@ function renderTeamBreakdownHS(ownerBreakdown) {
 
 function renderTeamBreakdown(teams, isHubspot = false) {
   const tbody = document.getElementById('tbodyTeamBreakdown');
+  teamBreakdownRows = teams || [];
+  updateTableCount('teamBreakdownCount', (teams || []).length, (teams || []).length, 'teams');
   if (!teams || !teams.length) {
     tbody.innerHTML = '<tr><td colspan="8" class="empty">No teams data.</td></tr>';
     return;
@@ -757,11 +872,13 @@ function setupRepTopFilters() {
     },
     getAll: () => repTopLeads,
     render: rows => renderRepTopLeads(rows, true),
+    count: { id: 'repTopCount', noun: 'leads' },
   });
 }
 
 function renderRepTopLeads(leads, isHubspot = false) {
   const tbody = document.getElementById('tbodyRepTopLeads');
+  repTopRendered = (leads || []).slice(0, 20);
   if (!leads || !leads.length) {
     tbody.innerHTML = '<tr><td colspan="8" class="empty">No high-priority leads yet.</td></tr>';
     return;
@@ -1295,9 +1412,27 @@ function contactToLead(c) {
 }
 
 let contactsRendered = [];
+let contactsShown = [];
+
+function exportContactsCSV() {
+  const headers = ['Name','Email','Segment','Job Title','Employees','Country','Industry',
+    'Source Cloud','Destination Cloud','Score','Size Score','Geo Score','Industry Score',
+    'Migration Score','Buyer Score','Category','Priority'];
+  const rows = contactsShown.map(c => [
+    c.name || '', c.email || '', getContactSegment(c), c.title || '',
+    c.numberofemployees || '', c.country || '', c.industry || '',
+    c.source_cloud || '', c.destination_cloud || c.type_of_destination || '',
+    c.score ?? '',
+    c.breakdown?.companySize ?? '', c.breakdown?.geography ?? '', c.breakdown?.industry ?? '',
+    c.breakdown?.technology ?? '', c.breakdown?.buyerFit ?? '',
+    c.category || '', c.priority || ''
+  ]);
+  exportCsv('contacts_icp.csv', headers, rows, csvDateMeta('filterDateFrom', 'filterDateTo'));
+}
 
 function renderContactsTable(contacts) {
   const tbody = document.getElementById('tbodyContacts');
+  contactsShown = contacts;
   if (!contacts.length) { tbody.innerHTML = '<tr><td colspan="11" class="empty">No contacts match your filter.</td></tr>'; return; }
   contactsRendered = contacts.map(contactToLead);
   tbody.innerHTML = contacts.map((c, i) => `<tr style="cursor:pointer" onclick="showLeadDetail(contactsRendered[${i}])">
@@ -1347,6 +1482,7 @@ function setupContactFilters() {
     getAll: () => allContacts,
     render: renderContactsTable,
     extra: contactSearchDate,
+    count: { id: 'contactsCount', noun: 'contacts' },
   });
 }
 
@@ -1519,10 +1655,17 @@ function renderComboContacts(contacts) {
 function filterComboTable() {
   const q = (document.getElementById('comboSearch')?.value || '').toLowerCase();
   const rows = document.querySelectorAll('#tbodyCombo tr');
+  let shown = 0;
   rows.forEach(row => {
     if (row.querySelector('.empty')) return;
-    row.style.display = !q || row.textContent.toLowerCase().includes(q) ? '' : 'none';
+    const match = !q || row.textContent.toLowerCase().includes(q);
+    row.style.display = match ? '' : 'none';
+    if (match) shown++;
   });
+  const badge = document.getElementById('comboModalCount');
+  if (badge) badge.textContent = (shown === comboContacts.length)
+    ? `${comboContacts.length} customers`
+    : `Showing ${shown} of ${comboContacts.length} customers`;
 }
 
 function clearComboFilters() {
@@ -1534,7 +1677,6 @@ function clearComboFilters() {
 }
 
 function downloadComboCSV() {
-  if (!comboContacts.length) { showToast('No data to export'); return; }
   const headers = ['Name','Email','Company','Job Title','Country','Source Cloud','Destination Cloud',
     'Lead Source','Owner','Created Date','Employees','Industry','Score','Category','Priority'];
   const rows = comboContacts.map(l => [
@@ -1544,15 +1686,109 @@ function downloadComboCSV() {
     l.numberOfEmployees || '', l.industry || '',
     l.score ?? '', l.category || '', l.priority || ''
   ]);
-  const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
   const safe = (comboSelected ? `${comboSelected.source}_to_${comboSelected.destination}` : 'combination').replace(/[^a-z0-9]+/gi, '_');
-  a.href = url; a.download = `${safe}_customers.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
-  showToast('CSV downloaded');
+  exportCsv(`${safe}_customers.csv`, headers, rows, csvDateMeta('comboDateFrom', 'comboDateTo'));
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Outbound Leads
+// ══════════════════════════════════════════════════════════════════════════════
+let outboundLeads = [];
+let outboundShown = [];
+let outboundColFilters = null;
+let outboundViewReady = false;
+
+function initOutboundView() {
+  if (outboundViewReady) { return; }
+  const today = new Date(), past = new Date();
+  past.setDate(today.getDate() - 90);
+  document.getElementById('outboundDateFrom').value = past.toISOString().split('T')[0];
+  document.getElementById('outboundDateTo').value   = today.toISOString().split('T')[0];
+  outboundViewReady = true;
+  loadOutbound();
+}
+
+async function loadOutbound() {
+  const progress = document.getElementById('outboundProgress');
+  const results  = document.getElementById('outboundResults');
+  progress.classList.remove('hidden');
+  try {
+    await loadScoringConfig();
+    const from = document.getElementById('outboundDateFrom').value;
+    const to   = document.getElementById('outboundDateTo').value;
+    const params = new URLSearchParams();
+    if (from) params.set('dateFrom', from);
+    if (to)   params.set('dateTo', to);
+    const data = await apiFetch('/outbound/stats?' + params.toString());
+    outboundLeads = data.contacts || [];
+    document.getElementById('obTotal').textContent    = data.total;
+    document.getElementById('obCore').textContent     = data.categoryCount['Core ICP']     || 0;
+    document.getElementById('obStrong').textContent   = data.categoryCount['Strong ICP']   || 0;
+    document.getElementById('obModerate').textContent = data.categoryCount['Moderate ICP'] || 0;
+    document.getElementById('obNon').textContent      = data.categoryCount['Non ICP']      || 0;
+    renderSegmentCards(data.segmentStats || {}, 'outboundSegmentCards');
+    setupOutboundFilters();
+    outboundColFilters.refresh();
+    outboundColFilters.apply();
+    results.classList.remove('hidden');
+  } catch (err) {
+    showToast('Outbound load failed: ' + err.message, 5000);
+  } finally {
+    progress.classList.add('hidden');
+  }
+}
+
+function renderOutboundTable(leads) {
+  const tbody = document.getElementById('tbodyOutbound');
+  outboundShown = leads;
+  if (!leads.length) { tbody.innerHTML = '<tr><td colspan="12" class="empty">No outbound leads for these filters.</td></tr>'; return; }
+  tbody.innerHTML = leads.map((l, i) => `<tr style="cursor:pointer" onclick="showLeadDetail(outboundShown[${i}])">
+    <td><div style="font-weight:500;color:var(--blue-light,#0129AC)">${escHtml(l.name||'—')}</div><div style="font-size:12px;color:#707070">${escHtml(l.email||'')}</div></td>
+    <td style="font-size:12.5px;color:var(--muted)">${escHtml(l.segment||'Others')}</td>
+    ${scoringInputCells(l)}
+    <td style="color:#707070;font-size:12px">${escHtml(l.ownerName||'—')}</td>
+    <td>${scoreBar(l.score)}</td>
+    <td>${categoryBadge(l.category)}</td>
+    <td>${priorityBadge(l.priority)}</td>
+  </tr>`).join('');
+}
+
+function setupOutboundFilters() {
+  if (outboundColFilters) return;
+  const thead = document.getElementById('tbodyOutbound').closest('table').querySelector('thead');
+  outboundColFilters = installColumnFilters({
+    thead, ncols: 12,
+    cols: {
+      1:  { get: l => l.segment },
+      2:  { get: l => tierLabelFor('buyerFit',    l.breakdown?.buyerFit) },
+      3:  { get: l => tierLabelFor('companySize', l.breakdown?.companySize) },
+      4:  { get: l => l.countryCanon || l.country },
+      5:  { get: l => tierLabelFor('industry',    l.breakdown?.industry) },
+      6:  { get: l => tierLabelFor('technology',  l.breakdown?.technology) },
+      8:  { get: l => l.ownerName },
+      10: { get: l => l.category },
+      11: { get: l => l.priority },
+    },
+    getAll: () => outboundLeads,
+    render: renderOutboundTable,
+    count: { id: 'outboundCount', noun: 'contacts' },
+  });
+}
+
+function exportOutboundCSV() {
+  const headers = ['Name','Email','Segment','Job Title','Employees','Country','Industry',
+    'Source Cloud','Destination Cloud','Owner','Score','Size Score','Geo Score','Industry Score',
+    'Migration Score','Buyer Score','Category','Priority'];
+  const rows = outboundShown.map(l => [
+    l.name||'', l.email||'', l.segment||'', l.jobTitle||'',
+    l.numberOfEmployees||'', l.country||'', l.industry||'',
+    l.sourceCloud||'', l.destinationCloud||l.typeOfDestination||'', l.ownerName||'',
+    l.score ?? '',
+    l.breakdown?.companySize ?? '', l.breakdown?.geography ?? '', l.breakdown?.industry ?? '',
+    l.breakdown?.technology ?? '', l.breakdown?.buyerFit ?? '',
+    l.category||'', l.priority||''
+  ]);
+  exportCsv('outbound_leads.csv', headers, rows, csvDateMeta('outboundDateFrom', 'outboundDateTo'));
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1668,55 +1904,21 @@ function renderEnrichBanner(enrichStats) {
 }
 
 function downloadCSV() {
-  if (!fileLeads.length) return;
-  const headers = ['Name','Email','Company','Job Title','Employees','Country','Industry',
-    'Source Platform','Destination Platform','Size of Business','Phone','Created Date',
-    'Score','Category','Priority',
-    'Company Size Score','Company Size Reason','Geography Score','Geography Reason',
-    'Industry Score','Industry Reason','Migration Score','Migration Reason',
-    'Buyer Fit Score','Buyer Fit Reason'];
-  const rows = fileLeads.map(l => [
-    l.name || '', l.email || '', l.companyName || '', l.jobTitle || '',
+  const headers = ['Name','Email','Company','Segment','Job Title','Employees','Country','Industry',
+    'Source Cloud','Destination Cloud','Created Date',
+    'Score','Size Score','Geo Score','Industry Score','Migration Score','Buyer Score',
+    'Category','Priority'];
+  const rows = (fileRendered.length ? fileRendered : fileLeads).map(l => [
+    l.name || '', l.email || '', l.companyName || '', fileSegment(l), l.jobTitle || '',
     l.numberOfEmployees || '', l.country || '', l.industry || '',
     l.sourceCloud || '', l.destinationCloud || l.typeOfDestination || l.techStack || '',
-    l.sizeOfBusiness || '', l.phone || '', l.createdDate || '',
-    l.score ?? '', l.category || '', l.priority || '',
-    l.breakdown?.companySize ?? '', l.reasons?.companySize || '',
-    l.breakdown?.geography ?? '', l.reasons?.geography || '',
-    l.breakdown?.industry ?? '', l.reasons?.industry || '',
-    l.breakdown?.technology ?? '', l.reasons?.technology || '',
-    l.breakdown?.buyerFit ?? '', l.reasons?.buyerFit || ''
+    l.createdDate || '',
+    l.score ?? '',
+    l.breakdown?.companySize ?? '', l.breakdown?.geography ?? '',
+    l.breakdown?.industry ?? '', l.breakdown?.technology ?? '', l.breakdown?.buyerFit ?? '',
+    l.category || '', l.priority || ''
   ]);
-  const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = 'icp_scored_leads.csv';
-  a.click();
-  URL.revokeObjectURL(url);
-  showToast('CSV downloaded');
-}
-
-async function downloadExcel() {
-  if (!fileLeads.length) { showToast('No data to export'); return; }
-  try {
-    showToast('Generating Excel file…');
-    const res = await fetch(`${API}/file/download-excel`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ leads: fileLeads, filename: 'icp_scored_leads' })
-    });
-    if (!res.ok) throw new Error('Failed to generate Excel');
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'icp_scored_leads.xlsx';
-    a.click();
-    URL.revokeObjectURL(url);
-    showToast('Excel downloaded');
-  } catch (err) {
-    showToast('Excel download failed: ' + err.message);
-  }
+  exportCsv('icp_scored_leads.csv', headers, rows, csvDateMeta());
 }
 
 function renderFileResults(data) {
@@ -1786,6 +1988,7 @@ function setupFileFilters() {
     },
     getAll: () => fileLeads,
     render: renderFileTable,
+    count: { id: 'fileCount', noun: 'leads' },
   });
 }
 
@@ -1808,11 +2011,23 @@ document.addEventListener('DOMContentLoaded', () => {
     else if (v === 'rep-tracker') loadRepTracker();
     else if (v === 'hubspot-pull') loadHubspotPullView();
     else if (v === 'combinations') loadCombinations();
+    else if (v === 'outbound') loadOutbound();
     else checkConnection();
   });
 
   // Contacts
   document.getElementById('contactSearch').addEventListener('input', filterContacts);
+  document.getElementById('btnContactsCSV').addEventListener('click', exportContactsCSV);
+
+  // Dashboard / Rep Tracker CSV exports
+  document.getElementById('btnPriorityCSV').addEventListener('click', exportPriorityCSV);
+  document.getElementById('btnLeaderboardCSV').addEventListener('click', exportLeaderboardCSV);
+  document.getElementById('btnTeamCSV').addEventListener('click', exportTeamCSV);
+  document.getElementById('btnRepTopCSV').addEventListener('click', exportRepTopCSV);
+
+  // Outbound Leads
+  document.getElementById('btnOutboundLoad').addEventListener('click', loadOutbound);
+  document.getElementById('btnOutboundCSV').addEventListener('click', exportOutboundCSV);
 
   // Combinations
   document.getElementById('btnComboApply').addEventListener('click', loadCombinations);
@@ -1829,8 +2044,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // File Upload
   initFileUpload();
   document.getElementById('btnDownloadCSV').addEventListener('click', downloadCSV);
-  const btnExcel = document.getElementById('btnDownloadExcel');
-  if (btnExcel) btnExcel.addEventListener('click', downloadExcel);
 
   // HubSpot Pull
   document.getElementById('btnPullAndScore').addEventListener('click', pullAndScore);
@@ -1849,6 +2062,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Sync button
   document.getElementById('btnSyncHubspot').addEventListener('click', syncHubspot);
+
+  // Download the current page as PDF
+  document.getElementById('btnDownloadPdf').addEventListener('click', downloadPagePdf);
 
   // Lead popup modal
   document.getElementById('btnCloseLeadPopup').addEventListener('click', closeLeadPopup);

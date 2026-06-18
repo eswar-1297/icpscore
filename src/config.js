@@ -18,6 +18,15 @@ const MANDATORY_MQL_TYPES = [
   'Business MQL'
 ];
 
+// ─── Outbound Leads filters (separate view) ──────────────────────────────────
+//   Outbound Marketing lead = Yes  AND  Outbound marketing contact owner IN [...]
+// NOTE: verify these internal property names/values in HubSpot
+// (Settings → Properties). Adjust here if the pull returns 0 / errors.
+const OUTBOUND_LEAD_PROP   = 'outbound_marketing_lead';
+const OUTBOUND_LEAD_VALUE  = 'Yes';
+const OUTBOUND_OWNER_PROP  = 'outbound_marketing_contact_owner';
+const OUTBOUND_OWNERS      = ['Abhigna', 'Raj'];
+
 // Returns { dateFrom, dateTo } for the previous calendar quarter.
 // e.g. if today is Apr 1 2026 (Q2) → Q1 2026: { dateFrom: '2026-01-01', dateTo: '2026-03-31' }
 function getLastQuarterRange(now = new Date()) {
@@ -159,6 +168,10 @@ module.exports = {
   MANDATORY_LEAD_SOURCES,
   MANDATORY_TEAM_NAMES,
   MANDATORY_MQL_TYPES,
+  OUTBOUND_LEAD_PROP,
+  OUTBOUND_LEAD_VALUE,
+  OUTBOUND_OWNER_PROP,
+  OUTBOUND_OWNERS,
   getLastQuarterRange,
   CONTACT_PROPERTIES,
   COMPANY_PROPERTIES,

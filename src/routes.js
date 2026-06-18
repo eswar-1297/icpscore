@@ -12,6 +12,7 @@ const { loadConfig, saveConfig, getDefaultConfig } = require('./configManager');
 const rep = require('./repStore');
 const db  = require('./db');
 const { canonicalCountry } = require('./geography');
+const { toEtDate } = require('./datetime');
 
 // Multer — CSV / XLS / XLSX, in-memory, 20 MB max
 const ALLOWED_MIMES = new Set([
@@ -230,11 +231,9 @@ router.post('/hubspot/pull-and-score', async (req, res) => {
         destinationCloud:  p.destination_cloud || p.type_of_destination || null,
         typeOfDestination: p.type_of_destination || null,
         lifecycleStage:    p.lifecyclestage || null,
-        createdDate:       p.createdate ? new Date(p.createdate).toISOString().split('T')[0] : null,
-        ownerAssignedDate: p.hubspot_owner_assigneddate ? new Date(p.hubspot_owner_assigneddate).toISOString().split('T')[0] : null,
-        mqlDate:           p.hs_lifecyclestage_marketingqualifiedlead_date
-                             ? new Date(p.hs_lifecyclestage_marketingqualifiedlead_date).toISOString().split('T')[0]
-                             : null,
+        createdDate:       toEtDate(p.createdate),
+        ownerAssignedDate: toEtDate(p.hubspot_owner_assigneddate),
+        mqlDate:           toEtDate(p.hs_lifecyclestage_marketingqualifiedlead_date),
         ownerId:           p.hubspot_owner_id || null,
         ownerName:         owner ? owner.name : null,
         ownerEmail:        owner ? owner.email : null,
@@ -764,12 +763,9 @@ router.post('/rep-tracker/sync', async (req, res) => {
         leadSource:        p.lead_source         || null,
         mqlType:           p.mql_type            || null,
         lifecycleStage:    p.lifecyclestage       || null,
-        createdate:        p.createdate ? new Date(p.createdate).toISOString().split('T')[0] : null,
-        ownerAssignedDate: p.hubspot_owner_assigneddate
-                             ? new Date(p.hubspot_owner_assigneddate).toISOString().split('T')[0] : null,
-        mqlDate:           p.hs_lifecyclestage_marketingqualifiedlead_date
-                             ? new Date(p.hs_lifecyclestage_marketingqualifiedlead_date).toISOString().split('T')[0]
-                             : null
+        createdate:        toEtDate(p.createdate),
+        ownerAssignedDate: toEtDate(p.hubspot_owner_assigneddate),
+        mqlDate:           toEtDate(p.hs_lifecyclestage_marketingqualifiedlead_date)
       };
     });
 
@@ -894,7 +890,7 @@ router.post('/rep-tracker/rescore', (req, res) => {
 // GET /api/rep-tracker/hs-stats  — aggregated analytics from local DB (instant!)
 router.get('/rep-tracker/hs-stats', (req, res) => {
   try {
-    const { ownerId, teamId, dateFrom, dateTo } = req.query;
+    const { ownerId, teamId, dateFrom, dateTo, segment } = req.query;
 
     // If teamId is provided, resolve to owner IDs
     let ownerIds;
@@ -908,13 +904,14 @@ router.get('/rep-tracker/hs-stats', (req, res) => {
       ownerIds = [ownerId];
     }
 
-    const result = db.getRepStats({ ownerId: ownerIds?.length === 1 ? ownerIds[0] : undefined, ownerIds, dateFrom, dateTo });
+    const statFilters = { ownerId: ownerIds?.length === 1 ? ownerIds[0] : undefined, ownerIds, dateFrom, dateTo, segment };
+    const result = db.getRepStats(statFilters);
 
     // Also include the full leads list for chart click-through
     const leads = db.getAllContacts({
       ownerIds,
       ownerId: ownerIds?.length === 1 ? ownerIds[0] : undefined,
-      dateFrom, dateTo
+      dateFrom, dateTo, segment
     });
     const ownerMap = {};
     db.getOwners().forEach(o => { ownerMap[o.id] = o.name; });
@@ -926,6 +923,7 @@ router.get('/rep-tracker/hs-stats', (req, res) => {
       leadSource: l.lead_source,
       sourceCloud: l.source_cloud,
       destinationCloud: l.type_of_destination || l.destination_cloud,
+      segment: (l.size_of_business && l.size_of_business.trim()) ? l.size_of_business.trim() : 'Others',
       ownerName: ownerMap[l.hubspot_owner_id] || null, createDate: l.create_date
     }));
 
@@ -1009,6 +1007,71 @@ router.get('/combinations/contacts', (req, res) => {
     res.json({ ok: true, total: contacts.length, contacts });
   } catch (err) {
     res.status(500).json({ ok: false, message: err.message });
+  }
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  OUTBOUND LEADS — live pull (Outbound Marketing lead = Yes, owner IN [...])
+// ═════════════════════════════════════════════════════════════════════════════
+router.get('/outbound/stats', async (req, res) => {
+  try {
+    const { dateFrom, dateTo } = req.query;
+    const contacts = await hs.pullOutboundContacts({ dateFrom, dateTo });
+
+    const ownerMap = {};
+    try { (await hs.getOwners()).forEach(o => { ownerMap[o.id] = o; }); } catch (_) {}
+
+    const companyIds = contacts
+      .map(c => c.associations?.companies?.results?.[0]?.id || c.properties?.associatedcompanyid)
+      .filter(Boolean);
+    const companyMap = await hs.batchGetCompanies(companyIds);
+
+    const config    = loadConfig();
+    const techField = process.env.TECH_STACK_FIELD || 'technologies';
+
+    const leads = contacts.map(c => {
+      const p  = c.properties;
+      const companyId = c.associations?.companies?.results?.[0]?.id || p.associatedcompanyid;
+      const cp = companyId ? (companyMap.get(companyId) || null) : null;
+      const name = `${p.firstname || ''} ${p.lastname || ''}`.trim() || p.email;
+      const country = p[process.env.SELECT_COUNTRY_FIELD || 'select_country'] || p.country || cp?.country || null;
+      const lead = {
+        name, email: p.email, jobTitle: p.jobtitle,
+        numberOfEmployees: parseEmployeeCount(p.numberofemployees) || parseEmployeeCount(cp?.numberofemployees),
+        country, industry: p.industry || cp?.industry || null,
+        sourceCloud: p.source__cloud || p.source_destination || null,
+        destinationCloud: p.destination_cloud || p.type_of_destination || (cp ? cp[techField] : null),
+        companyName: cp?.name || null
+      };
+      const r = scoreExtractedLead(lead, config);
+      return {
+        name, email: p.email, jobTitle: p.jobtitle, companyName: cp?.name || null,
+        country, countryCanon: canonicalCountry(country),
+        industry: lead.industry, numberOfEmployees: lead.numberOfEmployees,
+        sourceCloud: lead.sourceCloud, destinationCloud: lead.destinationCloud,
+        segment: (p.size_of_business && p.size_of_business.trim()) ? p.size_of_business.trim() : 'Others',
+        ownerName: ownerMap[p.hubspot_owner_id]?.name || null,
+        createDate: toEtDate(p.createdate),
+        score: r.score, category: r.category, priority: r.priority, breakdown: r.breakdown
+      };
+    });
+
+    const CATS = ['Core ICP', 'Strong ICP', 'Moderate ICP', 'Non ICP'];
+    const categoryCount = {};
+    const segmentStats  = {};
+    leads.forEach(l => {
+      categoryCount[l.category] = (categoryCount[l.category] || 0) + 1;
+      const seg = l.segment || 'Others';
+      if (!segmentStats[seg]) { segmentStats[seg] = { total: 0 }; CATS.forEach(x => segmentStats[seg][x] = 0); }
+      segmentStats[seg].total++;
+      if (CATS.includes(l.category)) segmentStats[seg][l.category]++;
+    });
+
+    res.json({ ok: true, total: leads.length, categoryCount, segmentStats, contacts: leads });
+  } catch (err) {
+    console.error('outbound/stats error:', err);
+    const hsMsg = err.body?.message || err.response?.body?.message;
+    res.status(500).json({ ok: false, message: hsMsg ? `HubSpot: ${hsMsg}` : err.message });
   }
 });
 
@@ -1111,12 +1174,9 @@ router.post('/sync/full', async (req, res) => {
         type_of_destination: p.type_of_destination || null,
         tech_stack:          techStack,
         hubspot_owner_id:    p.hubspot_owner_id || null,
-        owner_assigned_date: p.hubspot_owner_assigneddate
-          ? new Date(p.hubspot_owner_assigneddate).toISOString().split('T')[0] : null,
-        create_date:         p.createdate
-          ? new Date(p.createdate).toISOString().split('T')[0] : null,
-        mql_date:            p.hs_lifecyclestage_marketingqualifiedlead_date
-          ? new Date(p.hs_lifecyclestage_marketingqualifiedlead_date).toISOString().split('T')[0] : null,
+        owner_assigned_date: toEtDate(p.hubspot_owner_assigneddate),
+        create_date:         toEtDate(p.createdate),
+        mql_date:            toEtDate(p.hs_lifecyclestage_marketingqualifiedlead_date),
         hs_analytics_source: p.hs_analytics_source || null,
         size_of_business:    p.size_of_business || null,
         icp_score:           result.score,

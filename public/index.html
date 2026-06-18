@@ -47,6 +47,10 @@
       <svg viewBox="0 0 24 24"><path d="M6.99 11L3 15l3.99 4v-3H14v-2H6.99v-3zM21 9l-3.99-4v3H10v2h7.01v3L21 9z"/></svg>
       <span>Combinations</span>
     </a>
+    <a href="#" class="nav-item" data-view="outbound">
+      <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+      <span>Outbound Leads</span>
+    </a>
   </nav>
 
   <div class="sidebar-footer">
@@ -74,6 +78,7 @@
       </div>
       <button class="btn btn-sync" id="btnSyncHubspot" title="Pull latest data from HubSpot">Sync Now</button>
       <button class="btn btn-secondary" id="btnRefresh">Refresh</button>
+      <button class="btn btn-secondary" id="btnDownloadPdf" title="Download this page as a PDF">Download PDF</button>
     </div>
   </header>
 
@@ -82,6 +87,9 @@
     <div class="spinner"></div>
     <span id="syncBannerMsg">Syncing contacts from HubSpot…</span>
   </div>
+
+  <!-- Print-only header (shown in the PDF export) -->
+  <div id="printHeader" class="print-only"></div>
 
   <div class="toast" id="toast"></div>
 
@@ -106,8 +114,11 @@
     </div>
     <div class="table-box">
       <div class="table-box-header">
-        <h3>High-Priority Leads</h3>
-        <span style="color:#707070;font-size:12px">Use the dropdowns under each column to filter ↓</span>
+        <h3>High-Priority Leads <span class="table-count" id="priorityCount"></span></h3>
+        <div style="display:flex;gap:10px;align-items:center">
+          <span style="color:#707070;font-size:12px">Use the dropdowns under each column to filter ↓</span>
+          <button class="btn btn-secondary" id="btnPriorityCSV">Download CSV</button>
+        </div>
       </div>
       <div class="table-scroll">
         <table><thead><tr>
@@ -169,7 +180,10 @@
 
     <!-- Rep Leaderboard -->
     <div class="table-box">
-      <h3>Rep Leaderboard</h3>
+      <div class="table-box-header">
+        <h3>Rep Leaderboard <span class="table-count" id="repLeaderboardCount"></span></h3>
+        <button class="btn btn-secondary" id="btnLeaderboardCSV">Download CSV</button>
+      </div>
       <div class="table-scroll">
         <table>
           <thead><tr>
@@ -184,7 +198,10 @@
 
     <!-- Team Breakdown -->
     <div class="table-box">
-      <h3>Team Breakdown</h3>
+      <div class="table-box-header">
+        <h3>Team Breakdown <span class="table-count" id="teamBreakdownCount"></span></h3>
+        <button class="btn btn-secondary" id="btnTeamCSV">Download CSV</button>
+      </div>
       <div class="table-scroll">
         <table>
           <thead><tr><th>Team</th><th>Reps</th><th>Total Leads</th><th>Avg ICP</th><th>Core ICP</th><th>Strong ICP</th><th>Moderate ICP</th><th>Non ICP</th></tr></thead>
@@ -195,7 +212,10 @@
 
     <!-- Top Scored Leads -->
     <div class="table-box">
-      <h3>Top Scored Leads</h3>
+      <div class="table-box-header">
+        <h3>Top Scored Leads <span class="table-count" id="repTopCount"></span></h3>
+        <button class="btn btn-secondary" id="btnRepTopCSV">Download CSV</button>
+      </div>
       <div class="table-scroll">
         <table>
           <thead><tr><th>Name / Email</th><th>Company</th><th>Title</th><th>Country</th><th>Owner</th><th>Lead Source</th><th>Score</th><th>Category</th></tr></thead>
@@ -428,11 +448,8 @@
       <!-- Results table -->
       <div class="table-box">
         <div class="table-box-header">
-          <h3>Enriched &amp; Scored Leads</h3>
-          <div style="display:flex;gap:8px;align-items:center">
-            <button class="btn btn-secondary" id="btnDownloadCSV">Download CSV</button>
-            <button class="btn btn-primary" id="btnDownloadExcel">Download Excel</button>
-          </div>
+          <h3>Enriched &amp; Scored Leads <span class="table-count" id="fileCount"></span></h3>
+          <button class="btn btn-secondary" id="btnDownloadCSV">Download CSV</button>
         </div>
         <div class="table-scroll">
           <table>
@@ -481,6 +498,10 @@
       <span style="color:#707070;font-size:12px;align-self:center">Use the dropdowns under each column to filter ↓</span>
     </div>
     <div class="table-box">
+      <div class="table-box-header">
+        <h3>Contacts <span class="table-count" id="contactsCount"></span></h3>
+        <button class="btn btn-secondary" id="btnContactsCSV">Download CSV</button>
+      </div>
       <div class="table-scroll">
         <table>
           <thead><tr>
@@ -495,6 +516,57 @@
         </table>
       </div>
       <div class="table-meta" id="contactsMeta"></div>
+    </div>
+  </section>
+
+  <!-- ══════════════ OUTBOUND LEADS ══════════════════════════════════════════ -->
+  <section class="view" id="view-outbound">
+    <div class="toolbar" style="flex-wrap:wrap;gap:8px">
+      <span style="color:#2E2E2E;font-size:13px;font-weight:500;align-self:center">Outbound Marketing Leads (owners: Abhigna, Raj)</span>
+      <input type="date" class="admin-input" id="outboundDateFrom" style="width:150px" title="From (Create Date)" />
+      <span style="color:#707070;font-size:13px">→</span>
+      <input type="date" class="admin-input" id="outboundDateTo" style="width:150px" title="To (Create Date)" />
+      <button class="btn btn-primary" id="btnOutboundLoad">Load</button>
+      <div class="score-progress hidden" id="outboundProgress"><div class="spinner"></div><span>Pulling outbound leads…</span></div>
+    </div>
+
+    <div id="outboundResults" class="hidden">
+      <!-- KPI cards -->
+      <div class="cards-row">
+        <div class="card card-blue"><div class="card-label">Total Contacts</div><div class="card-value" id="obTotal">—</div></div>
+        <div class="card card-green"><div class="card-label">Core ICP</div><div class="card-value" id="obCore">—</div></div>
+        <div class="card card-yellow"><div class="card-label">Strong ICP</div><div class="card-value" id="obStrong">—</div></div>
+        <div class="card card-purple"><div class="card-label">Moderate ICP</div><div class="card-value" id="obModerate">—</div></div>
+        <div class="card card-red"><div class="card-label">Non ICP</div><div class="card-value" id="obNon">—</div></div>
+      </div>
+
+      <!-- Segment breakdown -->
+      <div class="segment-section">
+        <div class="segment-section-title">Segment Breakdown</div>
+        <div class="segment-cards-row" id="outboundSegmentCards"><p style="color:var(--muted);font-size:13px">—</p></div>
+      </div>
+
+      <!-- Contacts table -->
+      <div class="table-box">
+        <div class="table-box-header">
+          <h3>Outbound Contacts <span class="table-count" id="outboundCount"></span></h3>
+          <button class="btn btn-secondary" id="btnOutboundCSV">Download CSV</button>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr>
+              <th>Name / Email</th><th>Segment</th>
+              <th>Job Title <span class="th-dim">Buyer Fit</span></th>
+              <th>Employees <span class="th-dim">Size</span></th><th>Country <span class="th-dim">Geo</span></th>
+              <th>Industry <span class="th-dim">Industry</span></th>
+              <th>Source → Destination <span class="th-dim">Migration</span></th>
+              <th style="min-width:240px">Score Breakdown</th>
+              <th>Owner</th><th>Score</th><th>Category</th><th>Priority</th>
+            </tr></thead>
+            <tbody id="tbodyOutbound"><tr><td colspan="12" class="empty">Click Load to pull outbound leads.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
     </div>
   </section>
 

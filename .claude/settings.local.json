@@ -62,7 +62,13 @@
       "Bash(node -e \"const {canonicalCountry}=require\\('./src/geography'\\); ['New York','Texas','California','new york','NY','TX'].forEach\\(c=>console.log\\(c,'->',canonicalCountry\\(c\\)\\)\\)\")",
       "Read(//c/c/Users/SatyaPinniti/OneDrive - CloudFuze, Inc/Desktop/ICP SCORE/public/**)",
       "Read(//c/c/Users/SatyaPinniti/OneDrive - CloudFuze, Inc/Desktop/ICP SCORE/src/**)",
-      "Bash(node --check src/routes.js)"
+      "Bash(node --check src/routes.js)",
+      "PowerShell($c = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue; if \\($c\\) { \"running PID $\\($c.OwningProcess\\)\" } else { \"not running\" })",
+      "Bash(node --check src/datetime.js)",
+      "Bash(node -e \"const {toEtDate,etMidnightMs,nextDay}=require\\('./src/datetime'\\); console.log\\('UTC 2026-06-12T02:00Z \\(=Jun 11 ET\\) ->', toEtDate\\('2026-06-12T02:00:00Z'\\)\\); console.log\\('etMidnight 2026-06-12 ->', new Date\\(etMidnightMs\\('2026-06-12'\\)\\).toISOString\\(\\)\\); console.log\\('nextDay 2026-06-30 ->', nextDay\\('2026-06-30'\\)\\);\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
   }
 }
