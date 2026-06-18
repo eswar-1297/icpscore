@@ -1,4 +1,5 @@
 const hubspot = require('@hubspot/api-client');
+const https = require('https');
 const { CONTACT_PROPERTIES, COMPANY_PROPERTIES, MANDATORY_LEAD_SOURCES, MANDATORY_TEAM_NAMES, MANDATORY_MQL_TYPES,
         OUTBOUND_LEAD_PROP, OUTBOUND_LEAD_VALUE, OUTBOUND_OWNER_PROP, OUTBOUND_OWNERS, getLastQuarterRange } = require('./config');
 const { etMidnightMs, nextDay } = require('./datetime');
@@ -50,6 +51,44 @@ async function withRetry(fn, { retries = 4, baseDelay = 1000, label = 'hubspot' 
       await new Promise(r => setTimeout(r, delay));
     }
   }
+}
+
+// ─── Direct HubSpot GET (no connection pooling) ──────────────────────────────
+// The SDK reuses a keep-alive socket from a pool; in some cloud egress
+// environments (e.g. Render) HubSpot/Cloudflare half-closes idle sockets, so a
+// reused socket fails mid-stream with "Premature close" — and every immediate
+// retry grabs the same dead socket. Forcing a fresh connection per request
+// (agent:false + Connection: close) sidesteps the stale-socket problem.
+function hubspotGetJson(pathWithQuery) {
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'api.hubapi.com',
+      path: pathWithQuery,
+      method: 'GET',
+      agent: false,  // brand-new socket each request — never reuse a pooled one
+      headers: {
+        Authorization: `Bearer ${process.env.HUBSPOT_ACCESS_TOKEN}`,
+        Accept: 'application/json',
+        Connection: 'close',
+      },
+    }, (res) => {
+      let data = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          const err = new Error(`HubSpot ${res.statusCode}: ${data.slice(0, 200)}`);
+          err.statusCode = res.statusCode;
+          return reject(err);
+        }
+        try { resolve(JSON.parse(data)); }
+        catch (e) { reject(new Error(`Invalid JSON from HubSpot (${pathWithQuery})`)); }
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(30000, () => req.destroy(new Error('HubSpot request timed out')));
+    req.end();
+  });
 }
 
 // ─── Fetch all contacts (paginated) ──────────────────────────────────────────
@@ -235,14 +274,15 @@ async function ensureCustomProperties() {
 
 // ─── Get all contact owners (sales reps in HubSpot) ──────────────────────────
 async function getOwners() {
-  const hs = getClient();
   const all = [];
   let after;
   do {
-    // Signature: getPage(email?, after?, limit?, archived?)
-    // Passing undefined for email, use after cursor for pagination
+    // Use a direct GET with a fresh connection (see hubspotGetJson) — the SDK's
+    // pooled keep-alive socket repeatedly fails here with "Premature close".
+    const qs = new URLSearchParams({ limit: '100', archived: 'false' });
+    if (after) qs.set('after', after);
     const res = await withRetry(
-      () => hs.crm.owners.ownersApi.getPage(undefined, after, 100, false),
+      () => hubspotGetJson(`/crm/v3/owners/?${qs.toString()}`),
       { label: 'hubspot:owners' }
     );
     all.push(...(res.results || []));
