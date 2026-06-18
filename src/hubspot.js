@@ -26,6 +26,32 @@ function getClient() {
   return client;
 }
 
+// ─── Retry transient HubSpot/network failures ────────────────────────────────
+// HubSpot occasionally drops a response mid-stream ("Premature close" /
+// "Invalid response body" / socket resets) or rate-limits (429). These are
+// transient — retry with exponential backoff before giving up.
+function isRetryable(err) {
+  const status = err?.code || err?.statusCode || err?.response?.status;
+  if (status === 429 || (status >= 500 && status <= 599)) return true;
+  const msg = `${err?.message || ''} ${err?.cause?.message || ''} ${err?.cause?.code || ''}`.toLowerCase();
+  return /premature close|invalid response body|econnreset|socket hang up|etimedout|econnrefused|fetch failed|terminated|network|und_err/.test(msg);
+}
+
+async function withRetry(fn, { retries = 4, baseDelay = 1000, label = 'hubspot' } = {}) {
+  let attempt = 0;
+  for (;;) {
+    try {
+      return await fn();
+    } catch (err) {
+      attempt++;
+      if (attempt > retries || !isRetryable(err)) throw err;
+      const delay = baseDelay * 2 ** (attempt - 1);
+      console.warn(`[${label}] transient error (attempt ${attempt}/${retries}), retrying in ${delay}ms: ${err?.message}`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+}
+
 // ─── Fetch all contacts (paginated) ──────────────────────────────────────────
 async function getAllContacts({ dateFrom, dateTo } = {}) {
   const hs = getClient();
@@ -49,7 +75,10 @@ async function getAllContacts({ dateFrom, dateTo } = {}) {
     let after;
     do {
       if (after !== undefined) searchBody.after = after;
-      const res = await hs.crm.contacts.searchApi.doSearch(searchBody);
+      const res = await withRetry(
+        () => hs.crm.contacts.searchApi.doSearch(searchBody),
+        { label: 'hubspot:contacts-search' }
+      );
       contacts.push(...(res.results || []));
       after = res.paging?.next?.after;
     } while (after);
@@ -59,12 +88,15 @@ async function getAllContacts({ dateFrom, dateTo } = {}) {
   // No date filter — use the basic list API (returns associations inline)
   let after;
   do {
-    const response = await hs.crm.contacts.basicApi.getPage(
-      100,
-      after,
-      getContactProperties(),
-      undefined,
-      ['companies']   // fetch associated company in one call
+    const response = await withRetry(
+      () => hs.crm.contacts.basicApi.getPage(
+        100,
+        after,
+        getContactProperties(),
+        undefined,
+        ['companies']   // fetch associated company in one call
+      ),
+      { label: 'hubspot:contacts-list' }
     );
     contacts.push(...response.results);
     after = response.paging?.next?.after;
@@ -105,10 +137,13 @@ async function batchGetCompanies(companyIds) {
   for (let i = 0; i < uniqueIds.length; i += 100) {
     const chunk = uniqueIds.slice(i, i + 100);
     try {
-      const res = await hs.crm.companies.batchApi.read({
-        inputs: chunk.map(id => ({ id })),
-        properties: props
-      });
+      const res = await withRetry(
+        () => hs.crm.companies.batchApi.read({
+          inputs: chunk.map(id => ({ id })),
+          properties: props
+        }),
+        { label: 'hubspot:companies-batch' }
+      );
       for (const co of res.results) {
         map.set(co.id, co.properties);
       }
@@ -206,7 +241,10 @@ async function getOwners() {
   do {
     // Signature: getPage(email?, after?, limit?, archived?)
     // Passing undefined for email, use after cursor for pagination
-    const res = await hs.crm.owners.ownersApi.getPage(undefined, after, 200, false);
+    const res = await withRetry(
+      () => hs.crm.owners.ownersApi.getPage(undefined, after, 200, false),
+      { label: 'hubspot:owners' }
+    );
     all.push(...(res.results || []));
     after = res.paging?.next?.after;
   } while (after);
@@ -223,7 +261,10 @@ async function getOwners() {
 async function getHubspotTeams() {
   const hs = getClient();
   try {
-    const res = await hs.settings.users.teamsApi.getAll();
+    const res = await withRetry(
+      () => hs.settings.users.teamsApi.getAll(),
+      { label: 'hubspot:teams' }
+    );
     return (res.results || []).map(t => ({
       id:      String(t.id),
       name:    t.name,
