@@ -7,7 +7,6 @@ const API = '/api';
 let chartCategory = null;
 let chartGeo      = null;
 let chartRepCat   = null;
-let chartWeekly   = null;
 let chartScoreDist = null;
 let allContacts   = [];
 let fileLeads     = [];       // results from last file analysis
@@ -97,7 +96,65 @@ function updateTableCount(id, shown, total, noun = 'rows') {
   if (!el) return;
   el.textContent = (shown === total)
     ? `${total} ${noun}`
-    : `Showing ${shown} of ${total} ${noun}`;
+    : `Showing ${shown} of ${total} ${noun} (${pct(shown, total)})`;
+}
+
+// ── Percentage helpers (shown next to every count for easy measurement) ─────────
+// Format part/whole as a percentage. Returns '0%' when the whole is empty.
+function pct(part, whole) {
+  if (!whole || whole <= 0) return '0%';
+  const p = (part / whole) * 100;
+  // Show one decimal only when it adds information (avoids "33.0%").
+  return (Math.round(p * 10) / 10) + '%';
+}
+
+// ── Chart tooltip helpers (show count + % on every graph) ──────────────────────
+// % of the sum of the hovered dataset — for doughnut / single-series bar charts.
+function chartPctOfDataset(ctx) {
+  const arr = (ctx.dataset?.data || []).map(v => Number(v) || 0);
+  const total = arr.reduce((a, b) => a + b, 0);
+  return pct(Number(ctx.raw) || 0, total);
+}
+// % of the stacked total at the hovered index — for stacked bar charts.
+function chartPctOfStack(ctx) {
+  const idx = ctx.dataIndex;
+  const total = (ctx.chart?.data?.datasets || [])
+    .reduce((s, d) => s + (Number(d.data[idx]) || 0), 0);
+  return pct(Number(ctx.raw) || 0, total);
+}
+
+// Set a card's value plus its "% of total" sub-label (category cards).
+// pctId is optional — omit for the Total card, which is the 100% baseline.
+function setCardStat(valueId, value, pctId, part, whole) {
+  const v = document.getElementById(valueId);
+  if (v) v.textContent = value;
+  if (pctId) {
+    const p = document.getElementById(pctId);
+    if (p) p.textContent = whole > 0 ? `${pct(part, whole)} of total` : '';
+  }
+}
+
+// Build the ICP-category breakdown bar (Total + each category with count and %)
+// shown on top of every leads table so the mix is easy to measure at a glance.
+function categoryStatsHtml(leads) {
+  const total = (leads || []).length;
+  const cats = [
+    ['Core ICP', 'dot-core'], ['Strong ICP', 'dot-strong'],
+    ['Moderate ICP', 'dot-moderate'], ['Non ICP', 'dot-non'],
+  ];
+  const counts = {};
+  (leads || []).forEach(l => { counts[l.category] = (counts[l.category] || 0) + 1; });
+  const pills = cats.map(([c, dot]) =>
+    `<span class="tstat"><span class="seg-dot ${dot}"></span>${c} <b>${counts[c] || 0}</b><span class="tstat-pct">${pct(counts[c] || 0, total)}</span></span>`
+  ).join('');
+  return `<span class="tstat tstat-total">Total <b>${total}</b> contacts</span>${pills}`;
+}
+
+// Render the category breakdown bar into a container element (no-op if missing).
+function renderTableStats(elId, leads) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  el.innerHTML = (leads && leads.length) ? categoryStatsHtml(leads) : '';
 }
 
 // ── CSV export (shared) ───────────────────────────────────────────────────────
@@ -171,13 +228,26 @@ function installColumnFilters({ thead, ncols, cols, getAll, render, extra, count
     for (const i in sels) {
       const sel = sels[i];
       const cur = sel.value;
-      const vals = [...new Set(all
-        .map(r => cols[i].get(r))
-        .filter(v => v != null && String(v).trim() !== '' && v !== '—' && !String(v).startsWith('— →')))]
-        .sort((a, b) => String(a).localeCompare(String(b)));
+      // Dedup case-insensitively (so "OneDrive"/"Onedrive" collapse to one option),
+      // keeping the first-seen casing as the display label. Columns with a `norm`
+      // (e.g. cloud names) collapse spelling/spacing variants to a canonical label.
+      const norm = cols[i].norm;
+      const seen = new Map();
+      all.forEach(r => {
+        const v = cols[i].get(r);
+        if (v == null) return;
+        let s = String(v).trim();
+        if (!s || s === '—' || s.startsWith('— →')) return;
+        if (norm) { s = norm(s); if (!s) return; }
+        const key = s.toLowerCase();
+        if (!seen.has(key)) seen.set(key, s);
+      });
+      const vals = [...seen.values()].sort((a, b) => a.localeCompare(b));
       sel.innerHTML = '<option value="">All</option>' +
         vals.map(v => `<option value="${escHtml(v)}">${escHtml(v)}</option>`).join('');
-      sel.value = vals.includes(cur) ? cur : '';
+      const curKey = cur.trim().toLowerCase();
+      const match = vals.find(v => v.toLowerCase() === curKey);
+      sel.value = match || '';
     }
   }
 
@@ -186,7 +256,12 @@ function installColumnFilters({ thead, ncols, cols, getAll, render, extra, count
     const filtered = all.filter(r => {
       for (const i in sels) {
         const want = sels[i].value;
-        if (want && String(cols[i].get(r) ?? '') !== want) return false;
+        if (!want) continue;
+        // Normalise + case-fold so one option catches every variant of the value.
+        const norm = cols[i].norm;
+        let v = String(cols[i].get(r) ?? '').trim();
+        if (norm) v = norm(v);
+        if (v.toLowerCase() !== want.toLowerCase()) return false;
       }
       return extra ? extra(r) : true;
     });
@@ -232,6 +307,18 @@ function tierLabelFor(dim, score) {
 //  Navigation
 // ══════════════════════════════════════════════════════════════════════════════
 
+// Copy the main top-bar date range into a view's own date inputs every time the
+// view is opened, so every sub-filter always mirrors the main filter and there's
+// no confusion about which range is in effect.
+function prefillDatesFromMain(fromId, toId) {
+  const mainFrom = document.getElementById('syncDateFrom')?.value || '';
+  const mainTo   = document.getElementById('syncDateTo')?.value   || '';
+  const f = document.getElementById(fromId);
+  const t = document.getElementById(toId);
+  if (f && mainFrom) f.value = mainFrom;
+  if (t && mainTo)   t.value = mainTo;
+}
+
 function switchView(view) {
   document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
@@ -246,11 +333,11 @@ function switchView(view) {
 
 
   if (view === 'dashboard')      loadDashboard();
-  if (view === 'contacts')       loadContacts();
-  if (view === 'rep-tracker')    loadRepTracker();
+  if (view === 'contacts')       { prefillDatesFromMain('filterDateFrom', 'filterDateTo'); loadContacts(); }
+  if (view === 'rep-tracker')    { prefillDatesFromMain('repDateFrom', 'repDateTo');       loadRepTracker(); }
   if (view === 'hubspot-pull')   loadHubspotPullView();
   if (view === 'pdf')            loadRepSelectorsForUpload();
-  if (view === 'combinations')   loadCombinations();
+  if (view === 'combinations')   { prefillDatesFromMain('comboDateFrom', 'comboDateTo');   loadCombinations(); }
   if (view === 'outbound')       initOutboundView();
 }
 
@@ -365,11 +452,13 @@ async function loadDashboard() {
   try {
     await loadScoringConfig();   // for tier-bucketed column filters
     const data = await apiFetch('/dashboard');
-    document.getElementById('statTotal').textContent  = data.total;
-    document.getElementById('statCore').textContent     = data.categoryCount['Core ICP']     || 0;
-    document.getElementById('statStrong').textContent   = data.categoryCount['Strong ICP']   || 0;
-    document.getElementById('statModerate').textContent = data.categoryCount['Moderate ICP'] || 0;
-    document.getElementById('statNon').textContent      = data.categoryCount['Non ICP']      || 0;
+    const dTotal = data.total || 0;
+    setCardStat('statTotal',    dTotal, 'statTotalPct', dTotal, dTotal);
+    document.getElementById('statTotalPct').textContent = dTotal > 0 ? '100% of total' : '';
+    setCardStat('statCore',     data.categoryCount['Core ICP']     || 0, 'statCorePct',     data.categoryCount['Core ICP']     || 0, dTotal);
+    setCardStat('statStrong',   data.categoryCount['Strong ICP']   || 0, 'statStrongPct',   data.categoryCount['Strong ICP']   || 0, dTotal);
+    setCardStat('statModerate', data.categoryCount['Moderate ICP'] || 0, 'statModeratePct', data.categoryCount['Moderate ICP'] || 0, dTotal);
+    setCardStat('statNon',      data.categoryCount['Non ICP']      || 0, 'statNonPct',      data.categoryCount['Non ICP']      || 0, dTotal);
     renderSegmentCards(data.segmentStats || {});
     renderCategoryChart(data.categoryCount);
     renderGeoChart(data.geographyCount);
@@ -393,17 +482,22 @@ function renderSegmentCards(segs, containerId = 'segmentCardsRow') {
     if (bi !== -1) return 1;
     return a.localeCompare(b);
   });
+  // Grand total across all segments — used for each segment's share of the whole.
+  const grandTotal = keys.reduce((sum, k) => sum + (segs[k].total || 0), 0);
   container.innerHTML = keys.map(seg => {
     const s = segs[seg];
+    const t = s.total || 0;
+    const row = (cat, dot) => `<div class="seg-row"><span class="seg-dot ${dot}"></span><span class="seg-cat">${cat}</span><span class="seg-cnt">${s[cat] || 0}</span><span class="seg-cnt-pct">${pct(s[cat] || 0, t)}</span></div>`;
     return `
       <div class="segment-card">
         <div class="seg-title">${seg}</div>
-        <div class="seg-total">${s.total}</div>
+        <div class="seg-total">${t}</div>
+        <div class="seg-total-pct">${pct(t, grandTotal)} of all</div>
         <div class="seg-breakdown">
-          <div class="seg-row"><span class="seg-dot dot-core"></span><span class="seg-cat">Core ICP</span><span class="seg-cnt">${s['Core ICP'] || 0}</span></div>
-          <div class="seg-row"><span class="seg-dot dot-strong"></span><span class="seg-cat">Strong ICP</span><span class="seg-cnt">${s['Strong ICP'] || 0}</span></div>
-          <div class="seg-row"><span class="seg-dot dot-moderate"></span><span class="seg-cat">Moderate ICP</span><span class="seg-cnt">${s['Moderate ICP'] || 0}</span></div>
-          <div class="seg-row"><span class="seg-dot dot-non"></span><span class="seg-cat">Non ICP</span><span class="seg-cnt">${s['Non ICP'] || 0}</span></div>
+          ${row('Core ICP', 'dot-core')}
+          ${row('Strong ICP', 'dot-strong')}
+          ${row('Moderate ICP', 'dot-moderate')}
+          ${row('Non ICP', 'dot-non')}
         </div>
       </div>`;
   }).join('');
@@ -420,19 +514,22 @@ function renderCategoryChart(counts) {
     data: { labels, datasets: [{ data: values, backgroundColor: colours, borderWidth: 0, hoverOffset: 6 }] },
     options: { responsive: true, maintainAspectRatio: false, plugins: {
       legend: { position: 'bottom', labels: { color:'#707070', font:{ size:12 }, padding:16, boxWidth:12 } },
-      tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed}` } }
+      tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed} (${chartPctOfDataset(ctx)})` } }
     }, cutout: '68%' }
   });
 }
 
 function renderGeoChart(counts) {
   const sorted  = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  const grandTotal = Object.values(counts).reduce((a, b) => a + (Number(b) || 0), 0);
   const ctx     = document.getElementById('chartGeo').getContext('2d');
   if (chartGeo) chartGeo.destroy();
   chartGeo = new Chart(ctx, {
     type: 'bar',
     data: { labels: sorted.map(([k])=>k||'Unknown'), datasets: [{ label:'Contacts', data: sorted.map(([,v])=>v), backgroundColor: PALETTE, borderRadius:5, borderSkipped:false }] },
-    options: { responsive: true, maintainAspectRatio: false, indexAxis:'y', plugins: { legend:{ display:false } },
+    options: { responsive: true, maintainAspectRatio: false, indexAxis:'y',
+      plugins: { legend:{ display:false },
+        tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.raw} (${pct(Number(ctx.raw) || 0, grandTotal)} of all)` } } },
       scales: { x:{ ticks:{color:'#707070'}, grid:{color:'#E6E8EE'} }, y:{ ticks:{color:'#707070'}, grid:{display:false} } } }
   });
 }
@@ -445,16 +542,17 @@ function setupPriorityFilters() {
   if (priorityColFilters) return;
   const thead = document.querySelector('#view-dashboard .table-box table thead');
   priorityColFilters = installColumnFilters({
-    thead, ncols: 11,
+    thead, ncols: 12,
     cols: {
       1:  { get: l => l.segment },
       2:  { get: l => tierLabelFor('buyerFit',    l.breakdown?.buyerFit) },
       3:  { get: l => tierLabelFor('companySize', l.breakdown?.companySize) },
       4:  { get: l => l.countryCanon || l.country },
       5:  { get: l => tierLabelFor('industry',    l.breakdown?.industry) },
-      6:  { get: l => tierLabelFor('technology',  l.breakdown?.technology) },
-      9:  { get: l => l.category },
-      10: { get: l => l.priority },
+      6:  { get: l => l.sourceCloud, norm: canonicalCloud },
+      7:  { get: l => l.destinationCloud || l.typeOfDestination, norm: canonicalCloud },
+      10: { get: l => l.category },
+      11: { get: l => l.priority },
     },
     getAll: () => allHighPriorityLeads,
     render: renderPriorityTable,
@@ -489,7 +587,8 @@ function exportPriorityCSV() {
 function renderPriorityTable(leads) {
   const tbody = document.getElementById('tbodyPriority');
   priorityRendered = leads;
-  if (!leads.length) { tbody.innerHTML = '<tr><td colspan="11" class="empty">No high-priority leads for this segment.</td></tr>'; return; }
+  renderTableStats('priorityStats', leads);
+  if (!leads.length) { tbody.innerHTML = '<tr><td colspan="12" class="empty">No high-priority leads for this segment.</td></tr>'; return; }
   tbody.innerHTML = leads.map((l, i) => `<tr style="cursor:pointer" onclick="showLeadDetail(priorityRendered[${i}])">
     <td><div style="font-weight:500;color:var(--blue-light,#0129AC)">${escHtml(l.name)}</div><div style="font-size:12px;color:#707070">${escHtml(l.email||'')}</div></td>
     <td style="font-size:12.5px;color:var(--muted)">${escHtml(l.segment||'—')}</td>
@@ -598,18 +697,20 @@ async function loadHubspotRepStats() {
     window._repAllLeads = data.allLeads || [];
 
     // Summary cards
-    document.getElementById('repStatLeads').textContent    = data.total;
+    const rTotal = data.total || 0;
+    setCardStat('repStatLeads', rTotal, 'repStatLeadsPct', rTotal, rTotal);
+    document.getElementById('repStatLeadsPct').textContent = rTotal > 0 ? '100% of total' : '';
     document.getElementById('repStatAvgScore').textContent = data.avgScore > 0 ? data.avgScore : '—';
-    document.getElementById('repStatCore').textContent     = data.categoryCount['Core ICP']     || 0;
-    document.getElementById('repStatStrong').textContent   = data.categoryCount['Strong ICP']   || 0;
-    document.getElementById('repStatModerate').textContent = data.categoryCount['Moderate ICP'] || 0;
-    document.getElementById('repStatNon').textContent      = data.categoryCount['Non ICP']      || 0;
+    document.getElementById('repStatAvgScorePct').textContent = data.avgScore > 0 ? `${pct(data.avgScore, 100)} of 100` : '';
+    setCardStat('repStatCore',     data.categoryCount['Core ICP']     || 0, 'repStatCorePct',     data.categoryCount['Core ICP']     || 0, rTotal);
+    setCardStat('repStatStrong',   data.categoryCount['Strong ICP']   || 0, 'repStatStrongPct',   data.categoryCount['Strong ICP']   || 0, rTotal);
+    setCardStat('repStatModerate', data.categoryCount['Moderate ICP'] || 0, 'repStatModeratePct', data.categoryCount['Moderate ICP'] || 0, rTotal);
+    setCardStat('repStatNon',      data.categoryCount['Non ICP']      || 0, 'repStatNonPct',      data.categoryCount['Non ICP']      || 0, rTotal);
 
     // All filtering is now done server-side
     const ownerBreakdown = data.ownerBreakdown || [];
 
     renderRepCategoryChartHS(ownerBreakdown);
-    renderWeeklyTrendChart(data.weeklyTrend, true);
     renderScoreDistChart(data.scoreRanges);
     renderRepLeaderboard(ownerBreakdown, true);
     renderTeamBreakdownHS(ownerBreakdown);
@@ -655,60 +756,13 @@ function renderRepCategoryChartHS(ownerBreakdown) {
         const leads = (window._repAllLeads || []).filter(l => l.ownerName === ownerName && l.category === catName);
         showLeadPopup(`${ownerName} — ${catName}`, leads);
       },
-      plugins: { legend: { position: 'bottom', labels: { color: '#707070', font: { size: 11 }, padding: 12, boxWidth: 10 } } },
+      plugins: {
+        legend: { position: 'bottom', labels: { color: '#707070', font: { size: 11 }, padding: 12, boxWidth: 10 } },
+        tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${ctx.raw} (${chartPctOfStack(ctx)} of rep)` } }
+      },
       scales: {
         x: { stacked: true, ticks: { color: '#707070' }, grid: { display: false } },
         y: { stacked: true, ticks: { color: '#707070' }, grid: { color: '#E6E8EE' } }
-      }
-    }
-  });
-}
-
-function renderWeeklyTrendChart(trend, isHubspot = false) {
-  const ctx = document.getElementById('chartWeeklyTrend').getContext('2d');
-  if (chartWeekly) chartWeekly.destroy();
-  if (!trend || !trend.length) return;
-
-  const datasets = [
-    {
-      label: 'Total Leads',
-      data: trend.map(w => w.leads),
-      borderColor: '#0129AC',
-      backgroundColor: 'rgba(79,142,247,.1)',
-      fill: true, tension: 0.3,
-      pointRadius: 4, pointBackgroundColor: '#0129AC'
-    },
-    {
-      label: 'Core ICP',
-      data: trend.map(w => w.coreICP),
-      borderColor: '#0ED380',
-      backgroundColor: 'rgba(34,197,94,.1)',
-      fill: false, tension: 0.3,
-      pointRadius: 3, pointBackgroundColor: '#0ED380'
-    }
-  ];
-
-  if (isHubspot) {
-    datasets.push({
-      label: 'MQLs',
-      data: trend.map(w => w.mqls || 0),
-      borderColor: '#FE5833',
-      backgroundColor: 'rgba(249,115,22,.05)',
-      fill: false, tension: 0.3,
-      pointRadius: 3, pointBackgroundColor: '#FE5833',
-      borderDash: [5, 3]
-    });
-  }
-
-  chartWeekly = new Chart(ctx, {
-    type: 'line',
-    data: { labels: trend.map(w => w.weekStart), datasets },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { position: 'bottom', labels: { color: '#707070', font: { size: 11 }, padding: 12, boxWidth: 10 } } },
-      scales: {
-        x: { ticks: { color: '#707070' }, grid: { color: '#E6E8EE' } },
-        y: { beginAtZero: true, ticks: { color: '#707070' }, grid: { color: '#E6E8EE' } }
       }
     }
   });
@@ -741,7 +795,10 @@ function renderScoreDistChart(scoreRanges) {
         const [min, max] = ranges[elements[0].index];
         filterLeadsByScoreRange(min, max);
       },
-      plugins: { legend: { display: false } },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${ctx.raw} (${chartPctOfDataset(ctx)})` } }
+      },
       scales: {
         x: { ticks: { color: '#707070' }, grid: { display: false } },
         y: { beginAtZero: true, ticks: { color: '#707070', precision: 0 }, grid: { color: '#E6E8EE' } }
@@ -802,10 +859,10 @@ function renderRepLeaderboard(reps, isHubspot = false) {
     <td style="color:var(--muted);font-size:13px">${escHtml(isHubspot ? (r.ownerTeams || '—') : (r.teamName || '—'))}</td>
     <td><strong>${r.totalLeads}</strong></td>
     <td>${scoreBar(r.avgScore)}</td>
-    <td><span style="color:var(--blue-light,#0129AC);font-weight:600;cursor:pointer" onclick="event.stopPropagation();filterLeadsByCategory('Core ICP')">${r.categories?.['Core ICP'] || 0}</span></td>
-    <td><span style="color:var(--green);font-weight:600;cursor:pointer" onclick="event.stopPropagation();filterLeadsByCategory('Strong ICP')">${r.categories?.['Strong ICP'] || 0}</span></td>
-    <td><span style="color:var(--yellow);font-weight:600;cursor:pointer" onclick="event.stopPropagation();filterLeadsByCategory('Moderate ICP')">${r.categories?.['Moderate ICP'] || 0}</span></td>
-    <td><span style="color:var(--red);font-weight:600;cursor:pointer" onclick="event.stopPropagation();filterLeadsByCategory('Non ICP')">${r.categories?.['Non ICP'] || 0}</span></td>
+    <td><span style="color:var(--blue-light,#0129AC);font-weight:600;cursor:pointer" onclick="event.stopPropagation();filterLeadsByCategory('Core ICP')">${r.categories?.['Core ICP'] || 0}<i class="cell-pct">${pct(r.categories?.['Core ICP'] || 0, r.totalLeads)}</i></span></td>
+    <td><span style="color:var(--green);font-weight:600;cursor:pointer" onclick="event.stopPropagation();filterLeadsByCategory('Strong ICP')">${r.categories?.['Strong ICP'] || 0}<i class="cell-pct">${pct(r.categories?.['Strong ICP'] || 0, r.totalLeads)}</i></span></td>
+    <td><span style="color:var(--yellow);font-weight:600;cursor:pointer" onclick="event.stopPropagation();filterLeadsByCategory('Moderate ICP')">${r.categories?.['Moderate ICP'] || 0}<i class="cell-pct">${pct(r.categories?.['Moderate ICP'] || 0, r.totalLeads)}</i></span></td>
+    <td><span style="color:var(--red);font-weight:600;cursor:pointer" onclick="event.stopPropagation();filterLeadsByCategory('Non ICP')">${r.categories?.['Non ICP'] || 0}<i class="cell-pct">${pct(r.categories?.['Non ICP'] || 0, r.totalLeads)}</i></span></td>
   </tr>`;
   }).join('');
 }
@@ -849,10 +906,10 @@ function renderTeamBreakdown(teams, isHubspot = false) {
     <td>${t.repCount}</td>
     <td><strong>${t.totalLeads}</strong></td>
     <td>${isHubspot ? scoreBar(t.avgScore) : '<span style="color:#707070">—</span>'}</td>
-    <td><span style="color:#0129AC;font-weight:600">${t.categories?.['Core ICP'] || 0}</span></td>
-    <td><span style="color:#0ED380;font-weight:600">${t.categories?.['Strong ICP'] || 0}</span></td>
-    <td><span style="color:#E8A400;font-weight:600">${t.categories?.['Moderate ICP'] || 0}</span></td>
-    <td><span style="color:#FF1F1F;font-weight:600">${t.categories?.['Non ICP'] || 0}</span></td>
+    <td><span style="color:#0129AC;font-weight:600">${t.categories?.['Core ICP'] || 0}<i class="cell-pct">${pct(t.categories?.['Core ICP'] || 0, t.totalLeads)}</i></span></td>
+    <td><span style="color:#0ED380;font-weight:600">${t.categories?.['Strong ICP'] || 0}<i class="cell-pct">${pct(t.categories?.['Strong ICP'] || 0, t.totalLeads)}</i></span></td>
+    <td><span style="color:#E8A400;font-weight:600">${t.categories?.['Moderate ICP'] || 0}<i class="cell-pct">${pct(t.categories?.['Moderate ICP'] || 0, t.totalLeads)}</i></span></td>
+    <td><span style="color:#FF1F1F;font-weight:600">${t.categories?.['Non ICP'] || 0}<i class="cell-pct">${pct(t.categories?.['Non ICP'] || 0, t.totalLeads)}</i></span></td>
   </tr>`).join('');
 }
 
@@ -879,6 +936,7 @@ function setupRepTopFilters() {
 function renderRepTopLeads(leads, isHubspot = false) {
   const tbody = document.getElementById('tbodyRepTopLeads');
   repTopRendered = (leads || []).slice(0, 20);
+  renderTableStats('repTopStats', repTopRendered);
   if (!leads || !leads.length) {
     tbody.innerHTML = '<tr><td colspan="8" class="empty">No high-priority leads yet.</td></tr>';
     return;
@@ -1247,15 +1305,16 @@ async function pullAndScore() {
     }
 
     // Stats cards
+    const pTotal = data.total || 0;
     const cats = [
-      { label:'Total Pulled', value: data.total,                       cls:'card-blue'   },
+      { label:'Total Pulled', value: pTotal,                           cls:'card-blue',   isTotal:true },
       { label:'Core ICP',     value: data.stats['Core ICP']    || 0,   cls:'card-green'  },
       { label:'Strong ICP',   value: data.stats['Strong ICP']  || 0,   cls:'card-yellow' },
       { label:'Moderate ICP', value: data.stats['Moderate ICP']|| 0,   cls:'card-purple' },
       { label:'Non ICP',      value: data.stats['Non ICP']     || 0,   cls:'card-red'    }
     ];
     document.getElementById('pullStatsCards').innerHTML =
-      cats.map(c => `<div class="card ${c.cls}"><div class="card-label">${c.label}</div><div class="card-value">${c.value}</div></div>`).join('');
+      cats.map(c => `<div class="card ${c.cls}"><div class="card-label">${c.label}</div><div class="card-value">${c.value}</div><div class="card-pct">${pTotal > 0 ? (c.isTotal ? '100% of total' : pct(c.value, pTotal) + ' of total') : ''}</div></div>`).join('');
 
     document.getElementById('pullResultCount').textContent = `${data.total} contacts pulled`;
     renderPullResults(data.leads);
@@ -1291,8 +1350,9 @@ function scoreBreakdownMini(bd) {
 
 function renderPullResults(contacts) {
   const tbody = document.getElementById('tbodyPull');
+  renderTableStats('pullStats', contacts);
   if (!contacts || !contacts.length) {
-    tbody.innerHTML = '<tr><td colspan="11" class="empty">No contacts found. Adjust filters and try again.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="12" class="empty">No contacts found. Adjust filters and try again.</td></tr>';
     return;
   }
   tbody.innerHTML = contacts.map((l, i) => {
@@ -1313,10 +1373,8 @@ function renderPullResults(contacts) {
       <td style="color:#707070;font-size:13px">${escHtml(ownerTeam)}</td>
       <td><span class="badge badge-source">${escHtml(src)}</span></td>
       <td style="color:#707070;font-size:12px">${escHtml(l.mqlType||'—')}</td>
-      <td>
-        ${srcCloud !== '—' ? `<div style="font-size:11px;color:#707070">From: <span style="color:#E8A400">${escHtml(srcCloud)}</span></div>` : ''}
-        <div style="font-size:12px;font-weight:500;color:${destCloud!=='—'?'#0ED380':'#707070'}">${escHtml(destCloud)}</div>
-      </td>
+      <td style="font-size:12px">${escHtml(srcCloud)}</td>
+      <td style="font-size:12px">${escHtml(destCloud)}</td>
       <td style="color:#707070;font-size:12px">${formatDate(l.ownerAssignedDate)}</td>
       <td>${scoreBar(l.score)}</td>
       <td>${scoreBreakdownMini(l.breakdown)}</td>
@@ -1365,7 +1423,7 @@ function downloadPullCSV() {
 
 async function loadContacts() {
   const tbody = document.getElementById('tbodyContacts');
-  tbody.innerHTML = '<tr><td colspan="11" class="empty"><div class="spinner" style="margin:auto"></div></td></tr>';
+  tbody.innerHTML = '<tr><td colspan="12" class="empty"><div class="spinner" style="margin:auto"></div></td></tr>';
   try {
     await loadScoringConfig();   // needed so column filters can bucket by scoring tier
     const data  = await apiFetch('/contacts');
@@ -1374,7 +1432,7 @@ async function loadContacts() {
     contactColFilters.refresh();
     contactColFilters.apply();
     document.getElementById('contactsMeta').textContent = `${data.total} contacts`;
-  } catch (err) { tbody.innerHTML = `<tr><td colspan="11" class="empty">Error: ${escHtml(err.message)}</td></tr>`; }
+  } catch (err) { tbody.innerHTML = `<tr><td colspan="12" class="empty">Error: ${escHtml(err.message)}</td></tr>`; }
 }
 
 // Cells shared by the Contacts & Dashboard tables: the 5 scoring-input fields +
@@ -1389,11 +1447,8 @@ function scoringInputCells(l) {
     <td style="color:#707070">${emp}</td>
     <td style="color:#707070">${escHtml(l.country || '—')}</td>
     <td style="color:#707070;font-size:12px">${escHtml(l.industry || '—')}</td>
-    <td style="font-size:12px">
-      <span style="color:#E8A400">${escHtml(src)}</span>
-      <span style="color:#707070"> → </span>
-      <span style="color:#0ED380">${escHtml(dest)}</span>
-    </td>
+    <td style="font-size:12px">${escHtml(src)}</td>
+    <td style="font-size:12px">${escHtml(dest)}</td>
     <td>${scoreBreakdownMini(l.breakdown)}</td>`;
 }
 
@@ -1433,7 +1488,8 @@ function exportContactsCSV() {
 function renderContactsTable(contacts) {
   const tbody = document.getElementById('tbodyContacts');
   contactsShown = contacts;
-  if (!contacts.length) { tbody.innerHTML = '<tr><td colspan="11" class="empty">No contacts match your filter.</td></tr>'; return; }
+  renderTableStats('contactsStats', contacts);
+  if (!contacts.length) { tbody.innerHTML = '<tr><td colspan="12" class="empty">No contacts match your filter.</td></tr>'; return; }
   contactsRendered = contacts.map(contactToLead);
   tbody.innerHTML = contacts.map((c, i) => `<tr style="cursor:pointer" onclick="showLeadDetail(contactsRendered[${i}])">
     <td><div style="font-weight:500;color:var(--blue-light,#0129AC)">${escHtml(c.name||'—')}</div><div style="font-size:12px;color:#707070">${escHtml(c.email||'')}</div></td>
@@ -1468,16 +1524,17 @@ function setupContactFilters() {
   if (contactColFilters) return;
   const thead = document.querySelector('#view-contacts table thead');
   contactColFilters = installColumnFilters({
-    thead, ncols: 11,
+    thead, ncols: 12,
     cols: {
       1:  { get: c => getContactSegment(c) },
       2:  { get: c => tierLabelFor('buyerFit',    c.breakdown?.buyerFit) },     // Buyer Fit tier
       3:  { get: c => tierLabelFor('companySize', c.breakdown?.companySize) },  // Company Size tier
       4:  { get: c => c.countryCanon || c.country },
       5:  { get: c => tierLabelFor('industry',    c.breakdown?.industry) },     // Industry tier
-      6:  { get: c => tierLabelFor('technology',  c.breakdown?.technology) },   // Migration tier
-      9:  { get: c => c.category },
-      10: { get: c => c.priority },
+      6:  { get: c => c.source_cloud, norm: canonicalCloud },                              // Source cloud
+      7:  { get: c => c.destination_cloud || c.type_of_destination, norm: canonicalCloud }, // Destination cloud
+      10: { get: c => c.category },
+      11: { get: c => c.priority },
     },
     getAll: () => allContacts,
     render: renderContactsTable,
@@ -1511,7 +1568,7 @@ function comboFilters() {
 
 async function loadCombinations() {
   const grid = document.getElementById('comboGrid');
-  grid.innerHTML = '<div class="spinner" style="margin:20px auto"></div>';
+  grid.innerHTML = '<tr><td colspan="5" class="empty"><div class="spinner" style="margin:20px auto"></div></td></tr>';
   try {
     const { country, dateFrom, dateTo } = comboFilters();
     const params = new URLSearchParams();
@@ -1521,6 +1578,8 @@ async function loadCombinations() {
 
     const data = await apiFetch('/combinations?' + params.toString());
     comboCombinations = data.combinations || [];
+    setupComboFilters();
+    comboColFilters.refresh();
 
     // Populate the country dropdown once (preserve current selection)
     if (!comboCountriesReady && Array.isArray(data.countries)) {
@@ -1543,20 +1602,29 @@ async function loadCombinations() {
       else { comboSelected = null; closeComboModal(); }
     }
   } catch (err) {
-    grid.innerHTML = `<p class="empty">Error: ${escHtml(err.message)}</p>`;
+    grid.innerHTML = `<tr><td colspan="5" class="empty">Error: ${escHtml(err.message)}</td></tr>`;
   }
 }
 
 function renderCombinationGrid(combos) {
   const grid  = document.getElementById('comboGrid');
   const count = document.getElementById('comboCount');
+  const statsTop = document.getElementById('comboStatsTop');
   const totalCustomers = combos.reduce((s, c) => s + c.total, 0);
-  count.textContent = combos.length
+  if (count) count.textContent = combos.length
     ? `· ${combos.length} combinations, ${totalCustomers} customers`
     : '';
 
+  // Summary bar on top of the table (same style as the other tables)
+  if (statsTop) {
+    statsTop.innerHTML = combos.length
+      ? `<span class="tstat tstat-total">Total <b>${combos.length}</b> combinations</span>` +
+        `<span class="tstat">Customers <b>${totalCustomers}</b></span>`
+      : '';
+  }
+
   if (!combos.length) {
-    grid.innerHTML = '<p class="empty" style="padding:20px">No source → destination combinations for these filters. Try clearing the country/date filters or run a sync first.</p>';
+    grid.innerHTML = '<tr><td colspan="5" class="empty">No source → destination combinations for these filters. Try clearing the filters or run a sync first.</td></tr>';
     return;
   }
 
@@ -1565,35 +1633,48 @@ function renderCombinationGrid(combos) {
     const active = comboSelected &&
       comboSelected.source === c.source && comboSelected.destination === c.destination;
     return `
-      <div class="combo-card${active ? ' combo-card-active' : ''}" data-idx="${i}"
-           onclick="selectCombinationByIndex(${i})">
-        <div class="combo-route">
-          <span class="combo-src">${escHtml(c.source)}</span>
-          <span class="combo-arrow">→</span>
-          <span class="combo-dest">${escHtml(c.destination)}</span>
-        </div>
-        <div class="combo-total">${c.total}<span>customers</span></div>
-        <div class="combo-meta">
-          <span class="combo-avg">Avg ICP <b>${c.avgScore || '—'}</b></span>
-        </div>
-        <div class="combo-cats">
-          <span class="combo-cat" title="Core ICP"><span class="seg-dot dot-core"></span>${c.categories['Core ICP'] || 0}</span>
-          <span class="combo-cat" title="Strong ICP"><span class="seg-dot dot-strong"></span>${c.categories['Strong ICP'] || 0}</span>
-          <span class="combo-cat" title="Moderate ICP"><span class="seg-dot dot-moderate"></span>${c.categories['Moderate ICP'] || 0}</span>
-          <span class="combo-cat" title="Non ICP"><span class="seg-dot dot-non"></span>${c.categories['Non ICP'] || 0}</span>
-        </div>
-      </div>`;
+      <tr class="combo-tr${active ? ' combo-tr-active' : ''}" style="cursor:pointer" onclick="selectCombinationByIndex(${i})">
+        <td style="font-weight:600">${escHtml(c.source)}</td>
+        <td style="font-weight:600">${escHtml(c.destination)}</td>
+        <td style="font-weight:700">${c.total}</td>
+        <td style="color:var(--muted)">${pct(c.total, totalCustomers)}</td>
+        <td style="font-weight:600">${c.avgScore || '—'}</td>
+      </tr>`;
   }).join('');
 }
 
-/** Filter the combination cards by the search box (matches source / destination). */
-function filterComboGrid() {
+// Column-header dropdown filters for the Source / Destination columns — same
+// mechanism (and canonical Dropbox/Drop box dedup) as every other table.
+let comboColFilters = null;
+
+function setupComboFilters() {
+  if (comboColFilters) return;
+  const thead = document.getElementById('comboGrid').closest('table').querySelector('thead');
+  comboColFilters = installColumnFilters({
+    thead, ncols: 5,
+    cols: {
+      0: { get: c => c.source,      norm: canonicalCloud },
+      1: { get: c => c.destination, norm: canonicalCloud },
+    },
+    getAll: () => comboCombinations,
+    render: renderCombinationGrid,
+    extra:  comboSearchMatch,
+  });
+}
+
+// Search-box predicate (matches source / destination text).
+function comboSearchMatch(c) {
   const q = (document.getElementById('comboGridSearch')?.value || '').toLowerCase().trim();
-  const list = !q ? comboCombinations : comboCombinations.filter(c =>
-    `${c.source} → ${c.destination}`.toLowerCase().includes(q) ||
-    (c.source || '').toLowerCase().includes(q) ||
-    (c.destination || '').toLowerCase().includes(q));
-  renderCombinationGrid(list);
+  if (!q) return true;
+  return `${c.source} → ${c.destination}`.toLowerCase().includes(q) ||
+         (c.source || '').toLowerCase().includes(q) ||
+         (c.destination || '').toLowerCase().includes(q);
+}
+
+/** Re-apply the combination filters (search + column dropdowns). */
+function filterComboGrid() {
+  if (comboColFilters) comboColFilters.apply();
+  else renderCombinationGrid(comboCombinations);
 }
 
 // Dispatch from a card click by index — avoids embedding values with quotes/apostrophes in inline HTML.
@@ -1614,7 +1695,8 @@ async function selectCombination(source, destination) {
   document.getElementById('comboModalOverlay').classList.remove('hidden');  // open popup
   document.getElementById('comboResultsTitle').textContent = `${source} → ${destination}`;
   document.getElementById('comboModalCount').textContent = '';
-  tbody.innerHTML = '<tr><td colspan="12" class="empty"><div class="spinner" style="margin:auto"></div></td></tr>';
+  renderTableStats('comboStats', []);
+  tbody.innerHTML = '<tr><td colspan="13" class="empty"><div class="spinner" style="margin:auto"></div></td></tr>';
 
   try {
     const { country, dateFrom, dateTo } = comboFilters();
@@ -1627,15 +1709,16 @@ async function selectCombination(source, destination) {
     comboContacts = data.contacts || [];
     renderComboContacts(comboContacts);
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="12" class="empty">Error: ${escHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="13" class="empty">Error: ${escHtml(err.message)}</td></tr>`;
   }
 }
 
 function renderComboContacts(contacts) {
   const tbody = document.getElementById('tbodyCombo');
   document.getElementById('comboModalCount').textContent = `${contacts.length} customers`;
+  renderTableStats('comboStats', contacts);
   if (!contacts.length) {
-    tbody.innerHTML = '<tr><td colspan="12" class="empty">No customers for this combination.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="13" class="empty">No customers for this combination.</td></tr>';
     return;
   }
   tbody.innerHTML = contacts.map((l, i) => `<tr style="cursor:pointer" onclick="showLeadDetail(comboContacts[${i}])">
@@ -1673,6 +1756,8 @@ function clearComboFilters() {
   document.getElementById('comboDateFrom').value   = '';
   document.getElementById('comboDateTo').value     = '';
   document.getElementById('comboGridSearch').value = '';
+  const thead = document.getElementById('comboGrid').closest('table').querySelector('thead');
+  thead?.querySelectorAll('.col-filter').forEach(sel => { sel.value = ''; });
   loadCombinations();
 }
 
@@ -1699,11 +1784,16 @@ let outboundColFilters = null;
 let outboundViewReady = false;
 
 function initOutboundView() {
-  if (outboundViewReady) { return; }
-  const today = new Date(), past = new Date();
-  past.setDate(today.getDate() - 90);
-  document.getElementById('outboundDateFrom').value = past.toISOString().split('T')[0];
-  document.getElementById('outboundDateTo').value   = today.toISOString().split('T')[0];
+  // Always mirror the main top-bar date range; fall back to last 90 days.
+  prefillDatesFromMain('outboundDateFrom', 'outboundDateTo');
+  const fromEl = document.getElementById('outboundDateFrom');
+  const toEl   = document.getElementById('outboundDateTo');
+  if (!fromEl.value || !toEl.value) {
+    const today = new Date(), past = new Date();
+    past.setDate(today.getDate() - 90);
+    fromEl.value = past.toISOString().split('T')[0];
+    toEl.value   = today.toISOString().split('T')[0];
+  }
   outboundViewReady = true;
   loadOutbound();
 }
@@ -1721,11 +1811,13 @@ async function loadOutbound() {
     if (to)   params.set('dateTo', to);
     const data = await apiFetch('/outbound/stats?' + params.toString());
     outboundLeads = data.contacts || [];
-    document.getElementById('obTotal').textContent    = data.total;
-    document.getElementById('obCore').textContent     = data.categoryCount['Core ICP']     || 0;
-    document.getElementById('obStrong').textContent   = data.categoryCount['Strong ICP']   || 0;
-    document.getElementById('obModerate').textContent = data.categoryCount['Moderate ICP'] || 0;
-    document.getElementById('obNon').textContent      = data.categoryCount['Non ICP']      || 0;
+    const obT = data.total || 0;
+    setCardStat('obTotal', obT, 'obTotalPct', obT, obT);
+    document.getElementById('obTotalPct').textContent = obT > 0 ? '100% of total' : '';
+    setCardStat('obCore',     data.categoryCount['Core ICP']     || 0, 'obCorePct',     data.categoryCount['Core ICP']     || 0, obT);
+    setCardStat('obStrong',   data.categoryCount['Strong ICP']   || 0, 'obStrongPct',   data.categoryCount['Strong ICP']   || 0, obT);
+    setCardStat('obModerate', data.categoryCount['Moderate ICP'] || 0, 'obModeratePct', data.categoryCount['Moderate ICP'] || 0, obT);
+    setCardStat('obNon',      data.categoryCount['Non ICP']      || 0, 'obNonPct',      data.categoryCount['Non ICP']      || 0, obT);
     renderSegmentCards(data.segmentStats || {}, 'outboundSegmentCards');
     setupOutboundFilters();
     outboundColFilters.refresh();
@@ -1741,7 +1833,8 @@ async function loadOutbound() {
 function renderOutboundTable(leads) {
   const tbody = document.getElementById('tbodyOutbound');
   outboundShown = leads;
-  if (!leads.length) { tbody.innerHTML = '<tr><td colspan="12" class="empty">No outbound leads for these filters.</td></tr>'; return; }
+  renderTableStats('outboundStats', leads);
+  if (!leads.length) { tbody.innerHTML = '<tr><td colspan="13" class="empty">No outbound leads for these filters.</td></tr>'; return; }
   tbody.innerHTML = leads.map((l, i) => `<tr style="cursor:pointer" onclick="showLeadDetail(outboundShown[${i}])">
     <td><div style="font-weight:500;color:var(--blue-light,#0129AC)">${escHtml(l.name||'—')}</div><div style="font-size:12px;color:#707070">${escHtml(l.email||'')}</div></td>
     <td style="font-size:12.5px;color:var(--muted)">${escHtml(l.segment||'Others')}</td>
@@ -1757,17 +1850,18 @@ function setupOutboundFilters() {
   if (outboundColFilters) return;
   const thead = document.getElementById('tbodyOutbound').closest('table').querySelector('thead');
   outboundColFilters = installColumnFilters({
-    thead, ncols: 12,
+    thead, ncols: 13,
     cols: {
       1:  { get: l => l.segment },
       2:  { get: l => tierLabelFor('buyerFit',    l.breakdown?.buyerFit) },
       3:  { get: l => tierLabelFor('companySize', l.breakdown?.companySize) },
       4:  { get: l => l.countryCanon || l.country },
       5:  { get: l => tierLabelFor('industry',    l.breakdown?.industry) },
-      6:  { get: l => tierLabelFor('technology',  l.breakdown?.technology) },
-      8:  { get: l => l.ownerName },
-      10: { get: l => l.category },
-      11: { get: l => l.priority },
+      6:  { get: l => l.sourceCloud, norm: canonicalCloud },
+      7:  { get: l => l.destinationCloud || l.typeOfDestination, norm: canonicalCloud },
+      9:  { get: l => l.ownerName },
+      11: { get: l => l.category },
+      12: { get: l => l.priority },
     },
     getAll: () => outboundLeads,
     render: renderOutboundTable,
@@ -1924,8 +2018,9 @@ function downloadCSV() {
 function renderFileResults(data) {
   // Stats cards
   const statsEl = document.getElementById('pdfStatsCards');
+  const fTotal = data.total || 0;
   const cats = [
-    { label:'Total Imported',    value: data.total,                          cls: 'card-blue'   },
+    { label:'Total Imported',    value: fTotal,                             cls: 'card-blue', isTotal:true },
     { label:'Core ICP',          value: data.stats['Core ICP']     || 0,    cls: 'card-green'  },
     { label:'Strong ICP',        value: data.stats['Strong ICP']   || 0,    cls: 'card-yellow' },
     { label:'Moderate ICP',      value: data.stats['Moderate ICP'] || 0,    cls: 'card-purple' },
@@ -1935,6 +2030,7 @@ function renderFileResults(data) {
     <div class="card ${c.cls}">
       <div class="card-label">${c.label}</div>
       <div class="card-value">${c.value}</div>
+      <div class="card-pct">${fTotal > 0 ? (c.isTotal ? '100% of total' : pct(c.value, fTotal) + ' of total') : ''}</div>
     </div>`).join('');
 
   // Table + per-column filters
@@ -1951,8 +2047,9 @@ let fileRendered = [];
 
 function renderFileTable(leads) {
   const tbody = document.getElementById('tbodyFile');
+  renderTableStats('fileStats', leads);
   if (!leads.length) {
-    tbody.innerHTML = '<tr><td colspan="11" class="empty">No leads found in this file.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="12" class="empty">No leads found in this file.</td></tr>';
     return;
   }
   fileRendered = leads;
@@ -1975,16 +2072,17 @@ function setupFileFilters() {
   if (fileColFilters) return;
   const thead = document.getElementById('tbodyFile').closest('table').querySelector('thead');
   fileColFilters = installColumnFilters({
-    thead, ncols: 11,
+    thead, ncols: 12,
     cols: {
       1:  { get: l => fileSegment(l) },
       2:  { get: l => tierLabelFor('buyerFit',    l.breakdown?.buyerFit) },
       3:  { get: l => tierLabelFor('companySize', l.breakdown?.companySize) },
       4:  { get: l => l.countryCanon || l.country },
       5:  { get: l => tierLabelFor('industry',    l.breakdown?.industry) },
-      6:  { get: l => tierLabelFor('technology',  l.breakdown?.technology) },
-      9:  { get: l => l.category },
-      10: { get: l => l.priority },
+      6:  { get: l => l.sourceCloud, norm: canonicalCloud },
+      7:  { get: l => l.destinationCloud || l.typeOfDestination, norm: canonicalCloud },
+      10: { get: l => l.category },
+      11: { get: l => l.priority },
     },
     getAll: () => fileLeads,
     render: renderFileTable,
@@ -2113,7 +2211,7 @@ function showLeadPopup(title, leads) {
 
   const tbody = document.getElementById('leadPopupBody');
   if (!leads.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty">No leads in this segment</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">No leads in this segment</td></tr>';
   } else {
     window._popupLeads = leads.slice(0, 200);
     tbody.innerHTML = window._popupLeads.map((l, i) => `
@@ -2124,6 +2222,7 @@ function showLeadPopup(title, leads) {
         <td>${l.score != null ? scoreBar(l.score) : '—'}</td>
         <td>${categoryBadge(l.category)}</td>
         <td><span style="font-size:11px;color:var(--purple)">${escHtml(l.leadSource || '—')}</span></td>
+        <td style="font-size:11px">${escHtml(l.sourceCloud || '—')}</td>
         <td style="font-size:11px">${escHtml(l.destinationCloud || l.typeOfDestination || '—')}</td>
         <td style="font-size:11px;color:var(--blue-light,#0129AC)">View</td>
       </tr>

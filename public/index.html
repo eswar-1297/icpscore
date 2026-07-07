@@ -96,11 +96,11 @@
   <!-- ══════════════ DASHBOARD ══════════════════════════════════════════════ -->
   <section class="view active" id="view-dashboard">
     <div class="cards-row">
-      <div class="card card-blue"><div class="card-label">Total Contacts</div><div class="card-value" id="statTotal">—</div></div>
-      <div class="card card-green"><div class="card-label">Core ICP</div><div class="card-value" id="statCore">—</div></div>
-      <div class="card card-yellow"><div class="card-label">Strong ICP</div><div class="card-value" id="statStrong">—</div></div>
-      <div class="card card-purple"><div class="card-label">Moderate ICP</div><div class="card-value" id="statModerate">—</div></div>
-      <div class="card card-red"><div class="card-label">Non ICP</div><div class="card-value" id="statNon">—</div></div>
+      <div class="card card-blue"><div class="card-label">Total Contacts</div><div class="card-value" id="statTotal">—</div><div class="card-pct" id="statTotalPct"></div></div>
+      <div class="card card-green"><div class="card-label">Core ICP</div><div class="card-value" id="statCore">—</div><div class="card-pct" id="statCorePct"></div></div>
+      <div class="card card-yellow"><div class="card-label">Strong ICP</div><div class="card-value" id="statStrong">—</div><div class="card-pct" id="statStrongPct"></div></div>
+      <div class="card card-purple"><div class="card-label">Moderate ICP</div><div class="card-value" id="statModerate">—</div><div class="card-pct" id="statModeratePct"></div></div>
+      <div class="card card-red"><div class="card-label">Non ICP</div><div class="card-value" id="statNon">—</div><div class="card-pct" id="statNonPct"></div></div>
     </div>
     <div class="segment-section">
       <div class="segment-section-title">Segment Breakdown</div>
@@ -120,17 +120,19 @@
           <button class="btn btn-secondary" id="btnPriorityCSV">Download CSV</button>
         </div>
       </div>
+      <div class="table-stats" id="priorityStats"></div>
       <div class="table-scroll">
         <table><thead><tr>
             <th>Name / Email</th><th>Segment</th>
             <th>Job Title <span class="th-dim">Buyer Fit</span></th>
             <th>Employees <span class="th-dim">Size</span></th><th>Country <span class="th-dim">Geo</span></th>
             <th>Industry <span class="th-dim">Industry</span></th>
-            <th>Source → Destination <span class="th-dim">Migration</span></th>
+            <th>Source <span class="th-dim">Migration</span></th>
+            <th>Destination <span class="th-dim">Migration</span></th>
             <th style="min-width:240px">Score Breakdown</th>
             <th>Score</th><th>Category</th><th>Priority</th>
           </tr></thead>
-          <tbody id="tbodyPriority"><tr><td colspan="11" class="empty">Loading…</td></tr></tbody>
+          <tbody id="tbodyPriority"><tr><td colspan="12" class="empty">Loading…</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -159,22 +161,17 @@
 
     <!-- Summary cards (7) -->
     <div class="cards-row cards-row-7">
-      <div class="card card-blue"><div class="card-label">Total Leads</div><div class="card-value" id="repStatLeads">—</div></div>
-      <div class="card card-teal"><div class="card-label">Avg ICP Score</div><div class="card-value" id="repStatAvgScore">—</div></div>
-      <div class="card card-indigo"><div class="card-label">Core ICP</div><div class="card-value" id="repStatCore">—</div></div>
-      <div class="card card-green"><div class="card-label">Strong ICP</div><div class="card-value" id="repStatStrong">—</div></div>
-      <div class="card card-yellow"><div class="card-label">Moderate ICP</div><div class="card-value" id="repStatModerate">—</div></div>
-      <div class="card card-red"><div class="card-label">Non ICP</div><div class="card-value" id="repStatNon">—</div></div>
+      <div class="card card-blue"><div class="card-label">Total Leads</div><div class="card-value" id="repStatLeads">—</div><div class="card-pct" id="repStatLeadsPct"></div></div>
+      <div class="card card-teal"><div class="card-label">Avg ICP Score</div><div class="card-value" id="repStatAvgScore">—</div><div class="card-pct" id="repStatAvgScorePct"></div></div>
+      <div class="card card-indigo"><div class="card-label">Core ICP</div><div class="card-value" id="repStatCore">—</div><div class="card-pct" id="repStatCorePct"></div></div>
+      <div class="card card-green"><div class="card-label">Strong ICP</div><div class="card-value" id="repStatStrong">—</div><div class="card-pct" id="repStatStrongPct"></div></div>
+      <div class="card card-yellow"><div class="card-label">Moderate ICP</div><div class="card-value" id="repStatModerate">—</div><div class="card-pct" id="repStatModeratePct"></div></div>
+      <div class="card card-red"><div class="card-label">Non ICP</div><div class="card-value" id="repStatNon">—</div><div class="card-pct" id="repStatNonPct"></div></div>
     </div>
 
-    <!-- Charts row 1 -->
+    <!-- Charts row -->
     <div class="charts-row">
       <div class="chart-box"><h3>ICP Distribution by Rep</h3><div class="chart-wrap chart-wrap-lg"><canvas id="chartRepCategory"></canvas></div></div>
-      <div class="chart-box"><h3>Weekly Trend</h3><div class="chart-wrap chart-wrap-lg"><canvas id="chartWeeklyTrend"></canvas></div></div>
-    </div>
-
-    <!-- Charts row 2 -->
-    <div class="charts-row">
       <div class="chart-box"><h3>Score Distribution</h3><div class="chart-wrap chart-wrap-lg"><canvas id="chartScoreDist"></canvas></div></div>
     </div>
 
@@ -216,6 +213,7 @@
         <h3>Top Scored Leads <span class="table-count" id="repTopCount"></span></h3>
         <button class="btn btn-secondary" id="btnRepTopCSV">Download CSV</button>
       </div>
+      <div class="table-stats" id="repTopStats"></div>
       <div class="table-scroll">
         <table>
           <thead><tr><th>Name / Email</th><th>Company</th><th>Title</th><th>Country</th><th>Owner</th><th>Lead Source</th><th>Score</th><th>Category</th></tr></thead>
@@ -386,6 +384,7 @@
             <input class="admin-input" id="pullSearch" placeholder="Search name / email…" style="width:220px;padding:7px 12px" />
           </div>
         </div>
+        <div class="table-stats" id="pullStats"></div>
         <div class="table-scroll">
           <table id="tablePull">
             <thead>
@@ -395,7 +394,8 @@
                 <th>Team</th>
                 <th>Lead Source</th>
                 <th>MQL Type</th>
-                <th>Cloud (Src → Dest)</th>
+                <th>Source Cloud</th>
+                <th>Destination Cloud</th>
                 <th>Owner Assigned</th>
                 <th>Score</th>
                 <th style="min-width:260px">Score Breakdown</th>
@@ -403,7 +403,7 @@
                 <th>Priority</th>
               </tr>
             </thead>
-            <tbody id="tbodyPull"><tr><td colspan="11" class="empty">Run the filter above to pull contacts.</td></tr></tbody>
+            <tbody id="tbodyPull"><tr><td colspan="12" class="empty">Run the filter above to pull contacts.</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -451,6 +451,7 @@
           <h3>Enriched &amp; Scored Leads <span class="table-count" id="fileCount"></span></h3>
           <button class="btn btn-secondary" id="btnDownloadCSV">Download CSV</button>
         </div>
+        <div class="table-stats" id="fileStats"></div>
         <div class="table-scroll">
           <table>
             <thead>
@@ -461,14 +462,15 @@
                 <th>Employees <span class="th-dim">Size</span></th>
                 <th>Country <span class="th-dim">Geo</span></th>
                 <th>Industry <span class="th-dim">Industry</span></th>
-                <th>Source → Destination <span class="th-dim">Migration</span></th>
+                <th>Source <span class="th-dim">Migration</span></th>
+            <th>Destination <span class="th-dim">Migration</span></th>
                 <th style="min-width:240px">Score Breakdown</th>
                 <th>Score</th>
                 <th>Category</th>
                 <th>Priority</th>
               </tr>
             </thead>
-            <tbody id="tbodyFile"><tr><td colspan="11" class="empty">No results yet.</td></tr></tbody>
+            <tbody id="tbodyFile"><tr><td colspan="12" class="empty">No results yet.</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -502,17 +504,19 @@
         <h3>Contacts <span class="table-count" id="contactsCount"></span></h3>
         <button class="btn btn-secondary" id="btnContactsCSV">Download CSV</button>
       </div>
+      <div class="table-stats" id="contactsStats"></div>
       <div class="table-scroll">
         <table>
           <thead><tr>
             <th>Name / Email</th><th>Segment</th><th>Job Title <span class="th-dim">Buyer Fit</span></th>
             <th>Employees <span class="th-dim">Size</span></th><th>Country <span class="th-dim">Geo</span></th>
             <th>Industry <span class="th-dim">Industry</span></th>
-            <th>Source → Destination <span class="th-dim">Migration</span></th>
+            <th>Source <span class="th-dim">Migration</span></th>
+            <th>Destination <span class="th-dim">Migration</span></th>
             <th style="min-width:240px">Score Breakdown</th>
             <th>Score</th><th>Category</th><th>Priority</th>
           </tr></thead>
-          <tbody id="tbodyContacts"><tr><td colspan="11" class="empty">Click Refresh to load.</td></tr></tbody>
+          <tbody id="tbodyContacts"><tr><td colspan="12" class="empty">Click Refresh to load.</td></tr></tbody>
         </table>
       </div>
       <div class="table-meta" id="contactsMeta"></div>
@@ -533,11 +537,11 @@
     <div id="outboundResults" class="hidden">
       <!-- KPI cards -->
       <div class="cards-row">
-        <div class="card card-blue"><div class="card-label">Total Contacts</div><div class="card-value" id="obTotal">—</div></div>
-        <div class="card card-green"><div class="card-label">Core ICP</div><div class="card-value" id="obCore">—</div></div>
-        <div class="card card-yellow"><div class="card-label">Strong ICP</div><div class="card-value" id="obStrong">—</div></div>
-        <div class="card card-purple"><div class="card-label">Moderate ICP</div><div class="card-value" id="obModerate">—</div></div>
-        <div class="card card-red"><div class="card-label">Non ICP</div><div class="card-value" id="obNon">—</div></div>
+        <div class="card card-blue"><div class="card-label">Total Contacts</div><div class="card-value" id="obTotal">—</div><div class="card-pct" id="obTotalPct"></div></div>
+        <div class="card card-green"><div class="card-label">Core ICP</div><div class="card-value" id="obCore">—</div><div class="card-pct" id="obCorePct"></div></div>
+        <div class="card card-yellow"><div class="card-label">Strong ICP</div><div class="card-value" id="obStrong">—</div><div class="card-pct" id="obStrongPct"></div></div>
+        <div class="card card-purple"><div class="card-label">Moderate ICP</div><div class="card-value" id="obModerate">—</div><div class="card-pct" id="obModeratePct"></div></div>
+        <div class="card card-red"><div class="card-label">Non ICP</div><div class="card-value" id="obNon">—</div><div class="card-pct" id="obNonPct"></div></div>
       </div>
 
       <!-- Segment breakdown -->
@@ -552,6 +556,7 @@
           <h3>Outbound Contacts <span class="table-count" id="outboundCount"></span></h3>
           <button class="btn btn-secondary" id="btnOutboundCSV">Download CSV</button>
         </div>
+        <div class="table-stats" id="outboundStats"></div>
         <div class="table-scroll">
           <table>
             <thead><tr>
@@ -559,11 +564,12 @@
               <th>Job Title <span class="th-dim">Buyer Fit</span></th>
               <th>Employees <span class="th-dim">Size</span></th><th>Country <span class="th-dim">Geo</span></th>
               <th>Industry <span class="th-dim">Industry</span></th>
-              <th>Source → Destination <span class="th-dim">Migration</span></th>
+              <th>Source <span class="th-dim">Migration</span></th>
+            <th>Destination <span class="th-dim">Migration</span></th>
               <th style="min-width:240px">Score Breakdown</th>
               <th>Owner</th><th>Score</th><th>Category</th><th>Priority</th>
             </tr></thead>
-            <tbody id="tbodyOutbound"><tr><td colspan="12" class="empty">Click Load to pull outbound leads.</td></tr></tbody>
+            <tbody id="tbodyOutbound"><tr><td colspan="13" class="empty">Click Load to pull outbound leads.</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -584,11 +590,18 @@
       <button class="btn btn-secondary" id="btnComboClear">Clear</button>
     </div>
 
-    <!-- Combination cards grid -->
+    <!-- Combinations table -->
     <div class="segment-section">
-      <div class="segment-section-title">Source → Destination Combinations <span id="comboCount" style="font-weight:400;color:var(--muted);font-size:13px"></span></div>
-      <div class="combo-grid" id="comboGrid">
-        <p style="color:var(--muted);font-size:13px">Loading combinations…</p>
+      <div class="table-box">
+        <div class="table-stats" id="comboStatsTop"></div>
+        <div class="table-scroll">
+          <table class="combo-table">
+            <thead><tr>
+              <th>Source</th><th>Destination</th><th>Customers</th><th>%</th><th>Avg ICP</th>
+            </tr></thead>
+            <tbody id="comboGrid"><tr><td colspan="5" class="empty">Loading combinations…</td></tr></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -609,6 +622,7 @@
         </div>
       </div>
       <div class="modal-body" style="padding:0;overflow:hidden">
+        <div class="table-stats" id="comboStats"></div>
         <div class="table-scroll" style="max-height:74vh;overflow:auto">
           <table>
             <thead><tr>
@@ -616,11 +630,12 @@
               <th>Job Title <span class="th-dim">Buyer Fit</span></th>
               <th>Employees <span class="th-dim">Size</span></th><th>Country <span class="th-dim">Geo</span></th>
               <th>Industry <span class="th-dim">Industry</span></th>
-              <th>Source → Destination <span class="th-dim">Migration</span></th>
+              <th>Source <span class="th-dim">Migration</span></th>
+            <th>Destination <span class="th-dim">Migration</span></th>
               <th style="min-width:240px">Score Breakdown</th>
               <th>Score</th><th>Category</th><th>Priority</th>
             </tr></thead>
-            <tbody id="tbodyCombo"><tr><td colspan="12" class="empty">Select a combination to see its customers.</td></tr></tbody>
+            <tbody id="tbodyCombo"><tr><td colspan="13" class="empty">Select a combination to see its customers.</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -643,7 +658,7 @@
       <div class="table-scroll" style="max-height:60vh;overflow-y:auto">
         <table>
           <thead><tr>
-            <th>Name / Email</th><th>Company</th><th>Owner</th><th>Score</th><th>Category</th><th>Lead Source</th><th>Cloud</th><th></th>
+            <th>Name / Email</th><th>Company</th><th>Owner</th><th>Score</th><th>Category</th><th>Lead Source</th><th>Source</th><th>Destination</th><th></th>
           </tr></thead>
           <tbody id="leadPopupBody"></tbody>
         </table>
@@ -666,6 +681,7 @@
   </div>
 </div>
 
+<script src="clouds.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

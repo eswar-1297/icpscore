@@ -4,6 +4,7 @@ const Database = require('better-sqlite3');
 const path     = require('path');
 const fs       = require('fs');
 const { canonicalCountry } = require('./geography');
+const { canonicalCloud }   = require('../public/clouds');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DB_PATH  = path.join(DATA_DIR, 'icp-cache.db');
@@ -16,6 +17,8 @@ function getDb() {
   _db = new Database(DB_PATH);
   _db.pragma('journal_mode = WAL');
   _db.pragma('foreign_keys = ON');
+  // Canonical cloud-name normaliser, usable inside SQL (combinations grouping).
+  _db.function('canon_cloud', { deterministic: true }, v => canonicalCloud(v));
   migrate(_db);
   return _db;
 }
@@ -862,12 +865,14 @@ function getCombinations(filters = {}) {
   const params = {};
   const where = buildCombinationWhere(filters, params);
   const whereClause = where.length ? 'WHERE ' + where.join(' AND ') : '';
-  // Group case-insensitively (so "Google Chat" and "Google chat" merge);
+  // Group by CANONICAL cloud names, so all the messy variants collapse
+  // ("Dropbox"/"Drop box"/"Dropbox Business" → one row, "Slack"/"slack "/… → one).
+  // LOWER() folds any remaining casing differences in unrecognised values;
   // MIN() picks a single representative label for display.
   const sql = `
     SELECT
-      MIN(${SRC_EXPR})  AS source,
-      MIN(${DEST_EXPR}) AS destination,
+      MIN(canon_cloud(${SRC_EXPR}))  AS source,
+      MIN(canon_cloud(${DEST_EXPR})) AS destination,
       COUNT(*)                                                       AS total,
       ROUND(AVG(icp_score))                                          AS avgScore,
       SUM(CASE WHEN icp_category='Core ICP'     THEN 1 ELSE 0 END)   AS core,
@@ -876,7 +881,7 @@ function getCombinations(filters = {}) {
       SUM(CASE WHEN icp_category='Non ICP'      THEN 1 ELSE 0 END)   AS non
     FROM contacts
     ${whereClause}
-    GROUP BY LOWER(${SRC_EXPR}), LOWER(${DEST_EXPR})
+    GROUP BY LOWER(canon_cloud(${SRC_EXPR})), LOWER(canon_cloud(${DEST_EXPR}))
     ORDER BY total DESC
   `;
   return db.prepare(sql).all(params);
@@ -887,14 +892,14 @@ function getCombinationContacts(filters = {}) {
   const db = getDb();
   const params = {};
   const where = buildCombinationWhere(filters, params);
-  // Match case-insensitively so the representative label from the grid
-  // (e.g. "Google Chat") catches all casing variants in the data.
+  // Match on the CANONICAL cloud name so the representative label from the grid
+  // (e.g. "Dropbox") catches every raw variant in the data ("Drop box", …).
   if (filters.source) {
-    where.push(`LOWER(${SRC_EXPR}) = LOWER(@source)`);
+    where.push(`LOWER(canon_cloud(${SRC_EXPR})) = LOWER(@source)`);
     params.source = filters.source;
   }
   if (filters.destination) {
-    where.push(`LOWER(${DEST_EXPR}) = LOWER(@destination)`);
+    where.push(`LOWER(canon_cloud(${DEST_EXPR})) = LOWER(@destination)`);
     params.destination = filters.destination;
   }
   const whereClause = where.length ? 'WHERE ' + where.join(' AND ') : '';

@@ -115,6 +115,7 @@ body { display: flex; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 22px; }
 .card-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin-bottom: 8px; }
 .card-value { font-size: 32px; font-weight: 700; }
+.card-pct { font-size: 12px; font-weight: 600; color: var(--muted); margin-top: 4px; min-height: 16px; }
 
 /* ── Segment breakdown ────────────────────────────────────────────────────── */
 .segment-section { margin-bottom: 24px; }
@@ -123,7 +124,8 @@ body { display: flex; }
 .segment-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; }
 .seg-title { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
 .seg-range { font-size: 10px; font-weight: 400; color: var(--muted); }
-.seg-total { font-size: 28px; font-weight: 700; margin-bottom: 12px; }
+.seg-total { font-size: 28px; font-weight: 700; margin-bottom: 2px; }
+.seg-total-pct { font-size: 11.5px; font-weight: 600; color: var(--muted); margin-bottom: 10px; }
 .seg-breakdown { display: flex; flex-direction: column; gap: 6px; }
 .seg-row { display: flex; align-items: center; gap: 7px; font-size: 12.5px; }
 .seg-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
@@ -133,25 +135,29 @@ body { display: flex; }
 .dot-non      { background: var(--red); }
 .seg-cat { flex: 1; color: var(--muted); }
 .seg-cnt { font-weight: 700; }
+.seg-cnt-pct { font-weight: 600; color: var(--muted); font-size: 11px; min-width: 42px; text-align: right; }
+/* Inline count + % used inside table cells (leaderboard, team breakdown) */
+.cell-pct { font-weight: 500; color: var(--muted); font-size: 11px; margin-left: 4px; font-style: normal; }
 
-/* ── Combinations (source → destination) ──────────────────────────────────── */
-.combo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
-.combo-card {
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 14px 16px; cursor: pointer; transition: border-color .15s, transform .1s, box-shadow .15s;
+/* ── Combinations (source → destination) table ─────────────────────────────── */
+.combo-tr-active td { background: var(--surface2); }
+.combo-tr-active td:first-child { box-shadow: inset 3px 0 0 var(--blue-light); }
+
+/* ── Category breakdown bar shown on top of leads tables ───────────────────── */
+.table-stats {
+  display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center;
+  padding: 10px 16px; border-bottom: 1px solid var(--border);
+  background: var(--surface2); font-size: 12.5px; color: var(--muted);
 }
-.combo-card:hover { border-color: var(--blue-light); transform: translateY(-2px); box-shadow: 0 4px 14px rgba(0,0,0,.18); }
-.combo-card-active { border-color: var(--blue-light); box-shadow: 0 0 0 1px var(--blue-light) inset; }
-.combo-route { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; font-size: 13px; font-weight: 600; }
-.combo-src  { color: var(--yellow); }
-.combo-dest { color: var(--green); }
-.combo-arrow { color: var(--muted); }
-.combo-total { font-size: 26px; font-weight: 700; line-height: 1; }
-.combo-total span { font-size: 11px; font-weight: 400; color: var(--muted); margin-left: 6px; }
-.combo-meta { margin: 8px 0; font-size: 12px; color: var(--muted); }
-.combo-avg b { color: var(--text); }
-.combo-cats { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); border-top: 1px solid var(--border); padding-top: 8px; }
-.combo-cat { display: flex; align-items: center; gap: 5px; }
+.table-stats:empty { display: none; }
+.tstat { display: inline-flex; align-items: center; gap: 6px; }
+.tstat b { color: var(--text); font-weight: 700; font-size: 13px; }
+.tstat-total { font-weight: 600; color: var(--text); margin-right: 4px; }
+.tstat-total b { font-size: 14px; }
+.tstat-pct {
+  padding: 1px 7px; border-radius: 20px; background: var(--surface);
+  border: 1px solid var(--border); font-weight: 600; font-size: 11px; color: var(--blue);
+}
 
 /* Print-only header (PDF export) */
 .print-only { display: none; }
