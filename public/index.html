@@ -103,8 +103,14 @@
       <div class="card card-red"><div class="card-label">Non ICP</div><div class="card-value" id="statNon">—</div><div class="card-pct" id="statNonPct"></div></div>
     </div>
     <div class="segment-section">
-      <div class="segment-section-title">Segment Breakdown</div>
-      <div class="segment-cards-row" id="segmentCardsRow" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
+      <div class="seg-head-row">
+        <div class="segment-section-title">Segment Breakdown</div>
+        <div class="seg-toggle" data-target="segmentCardsRow">
+          <button type="button" class="seg-tog-btn active" data-panel-btn="icp" onclick="setSectionPanel(this,'icp')">ICP</button>
+          <button type="button" class="seg-tog-btn" data-panel-btn="bucket" onclick="setSectionPanel(this,'bucket')">Bucket</button>
+        </div>
+      </div>
+      <div class="segment-cards-row" id="segmentCardsRow" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
         <p style="color:var(--muted);font-size:13px">Loading…</p>
       </div>
     </div>
@@ -169,9 +175,15 @@
       <div class="card card-red"><div class="card-label">Non ICP</div><div class="card-value" id="repStatNon">—</div><div class="card-pct" id="repStatNonPct"></div></div>
     </div>
 
-    <!-- Team cards (per HubSpot team) — bucket-grade breakdown -->
-    <h3 style="margin:20px 0 10px;font-size:15px;font-weight:600">Teams</h3>
-    <div class="segment-cards-row" id="repTeamCards" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));margin-bottom:22px">
+    <!-- Team cards (per HubSpot team) — ICP / bucket breakdown -->
+    <div class="seg-head-row" style="margin-top:20px">
+      <h3 style="margin:0;font-size:15px;font-weight:600">Teams</h3>
+      <div class="seg-toggle" data-target="repTeamCards">
+        <button type="button" class="seg-tog-btn active" data-panel-btn="icp" onclick="setSectionPanel(this,'icp')">ICP</button>
+        <button type="button" class="seg-tog-btn" data-panel-btn="bucket" onclick="setSectionPanel(this,'bucket')">Bucket</button>
+      </div>
+    </div>
+    <div class="segment-cards-row" id="repTeamCards" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-bottom:22px">
       <p style="color:var(--muted);font-size:13px">No team data — run a sync first.</p>
     </div>
 

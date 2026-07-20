@@ -136,11 +136,25 @@ body { display: flex; }
 .seg-cat { flex: 1; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .seg-cnt { font-weight: 700; white-space: nowrap; }
 .seg-cnt-pct { font-weight: 600; color: var(--muted); font-size: 10.5px; min-width: 40px; text-align: right; white-space: nowrap; }
-/* Two side-by-side breakdown columns inside a segment card (ICP + Bucket) */
-.seg-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 20px; }
-.seg-col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.seg-col-title { font-size: 10px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 2px; }
 .seg-badge { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 4px; background: var(--border); color: var(--text, #1a1a1a); font-size: 11px; font-weight: 700; flex-shrink: 0; }
+
+/* Section heading row with ICP/Bucket toggle on the right */
+.seg-head-row { display: flex; align-items: center; justify-content: flex-start; gap: 12px; margin-bottom: 12px; }
+.seg-head-row .segment-section-title { margin-bottom: 0; }
+.seg-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; flex-shrink: 0; }
+.seg-tog-btn { border: none; background: transparent; color: var(--muted); font-size: 10.5px; font-weight: 700; padding: 3px 9px; cursor: pointer; transition: background .12s, color .12s; }
+.seg-tog-btn:hover { background: var(--border); }
+.seg-tog-btn.active { background: var(--blue-light, #0129AC); color: #fff; }
+.seg-tog-btn.active:hover { background: var(--blue-light, #0129AC); }
+/* Only the selected panel is visible */
+.segment-card[data-panel="icp"] .seg-panel-bucket { display: none; }
+.segment-card[data-panel="bucket"] .seg-panel-icp { display: none; }
+
+/* Per-card top row with a small tag showing the current breakdown mode */
+.seg-card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.seg-mode-tag { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--blue-light, #0129AC); background: rgba(1,41,172,.08); border-radius: 4px; padding: 2px 6px; flex-shrink: 0; }
+.segment-card[data-panel="icp"] .seg-mode-tag .seg-mode-bucket { display: none; }
+.segment-card[data-panel="bucket"] .seg-mode-tag .seg-mode-icp { display: none; }
 /* Inline count + % used inside table cells (leaderboard, team breakdown) */
 .cell-pct { font-weight: 500; color: var(--muted); font-size: 11px; margin-left: 4px; font-style: normal; }
 

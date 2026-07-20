@@ -479,8 +479,30 @@ function sortBucketKeys(keys) {
   });
 }
 
-// Render one card with an ICP-category column and a bucket-grade column side by
-// side. Shared by the Dashboard segment cards and the Sales Reps team cards.
+// Section-level ICP/Bucket toggle (next to the heading). Switches every card in
+// the associated cards row to the selected breakdown. The toggle carries a
+// data-target pointing at the cards-row id.
+function setSectionPanel(btn, panel) {
+  const toggle = btn.closest('.seg-toggle');
+  if (!toggle) return;
+  toggle.querySelectorAll('.seg-tog-btn').forEach(b =>
+    b.classList.toggle('active', b.getAttribute('data-panel-btn') === panel));
+  const row = document.getElementById(toggle.getAttribute('data-target'));
+  if (row) row.querySelectorAll('.segment-card').forEach(c => c.setAttribute('data-panel', panel));
+}
+
+// Re-apply a section's current toggle selection to its cards. Called after cards
+// are (re-)rendered so a freshly built card row respects the chosen breakdown.
+function applySectionPanel(rowId) {
+  const toggle = document.querySelector(`.seg-toggle[data-target="${rowId}"]`);
+  const active = toggle?.querySelector('.seg-tog-btn.active')?.getAttribute('data-panel-btn') || 'icp';
+  const row = document.getElementById(rowId);
+  if (row) row.querySelectorAll('.segment-card').forEach(c => c.setAttribute('data-panel', active));
+}
+
+// Render one card that shows EITHER an ICP-category breakdown OR a bucket-grade
+// breakdown, chosen with a small toggle in the top-right corner (ICP by default).
+// Shared by the Dashboard segment cards and the Sales Reps team cards.
 //   opts: { title, total, subtitle, icp, buckets, bucketKeys }
 //   - icp: object keyed by 'Core ICP' / 'Strong ICP' / 'Moderate ICP' / 'Non ICP'
 //   - buckets: object keyed by grade (A..E, Unassigned)
@@ -494,25 +516,24 @@ function icpBucketCardHTML({ title, total, subtitle, icp, buckets, bucketKeys })
   const bucketRow = (k) => {
     const n = bk[k] || 0;
     const label = k === 'Unassigned' ? 'U' : k;   // show Unassigned as "U"
-    return `<div class="seg-row"><span class="seg-badge">${escHtml(label)}</span><span style="flex:1"></span><span class="seg-cnt">${n}</span><span class="seg-cnt-pct">${pct(n, t)}</span></div>`;
+    return `<div class="seg-row"><span class="seg-badge">${escHtml(label)}</span><span class="seg-cat"></span><span class="seg-cnt">${n}</span><span class="seg-cnt-pct">${pct(n, t)}</span></div>`;
   };
   return `
-    <div class="segment-card">
-      <div class="seg-title">${escHtml(title)}</div>
+    <div class="segment-card" data-panel="icp">
+      <div class="seg-card-top">
+        <div class="seg-title">${escHtml(title)}</div>
+        <span class="seg-mode-tag"><span class="seg-mode-icp">ICP</span><span class="seg-mode-bucket">Bucket</span></span>
+      </div>
       <div class="seg-total">${t}</div>
       <div class="seg-total-pct">${subtitle}</div>
-      <div class="seg-cols">
-        <div class="seg-col">
-          <div class="seg-col-title">ICP</div>
-          ${icpRow('Core ICP', 'Core', 'dot-core')}
-          ${icpRow('Strong ICP', 'Strong', 'dot-strong')}
-          ${icpRow('Moderate ICP', 'Moderate', 'dot-moderate')}
-          ${icpRow('Non ICP', 'Non', 'dot-non')}
-        </div>
-        <div class="seg-col">
-          <div class="seg-col-title">Bucket</div>
-          ${bucketKeys.length ? bucketKeys.map(bucketRow).join('') : '<div class="seg-row" style="color:var(--muted)">—</div>'}
-        </div>
+      <div class="seg-breakdown seg-panel-icp">
+        ${icpRow('Core ICP', 'Core ICP', 'dot-core')}
+        ${icpRow('Strong ICP', 'Strong ICP', 'dot-strong')}
+        ${icpRow('Moderate ICP', 'Moderate ICP', 'dot-moderate')}
+        ${icpRow('Non ICP', 'Non ICP', 'dot-non')}
+      </div>
+      <div class="seg-breakdown seg-panel-bucket">
+        ${bucketKeys.length ? bucketKeys.map(bucketRow).join('') : '<div class="seg-row" style="color:var(--muted)">—</div>'}
       </div>
     </div>`;
 }
@@ -557,6 +578,7 @@ function renderSegmentCards(segs, containerId = 'segmentCardsRow') {
       bucketKeys
     });
   }).join('');
+  applySectionPanel(containerId);
 }
 
 function renderCategoryChart(counts) {
@@ -991,6 +1013,7 @@ function renderTeamCards(teams) {
       bucketKeys
     });
   }).join('');
+  applySectionPanel('repTeamCards');
 }
 
 function renderTeamBreakdown(teams, isHubspot = false) {
