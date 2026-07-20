@@ -55,6 +55,7 @@ function migrate(db) {
       mql_date          TEXT,
       hs_analytics_source TEXT,
       size_of_business    TEXT,
+      bucket              TEXT,
       -- ICP scoring
       icp_score         INTEGER,
       icp_category      TEXT,
@@ -136,6 +137,8 @@ function migrate(db) {
   `);
   // Add size_of_business column to existing DBs (safe to re-run)
   try { db.exec(`ALTER TABLE contacts ADD COLUMN size_of_business TEXT`); } catch (_) {}
+  // Add bucket column to existing DBs (safe to re-run)
+  try { db.exec(`ALTER TABLE contacts ADD COLUMN bucket TEXT`); } catch (_) {}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -151,7 +154,7 @@ function upsertContact(c) {
       lifecyclestage, lead_source, mql_type,
       source_cloud, destination_cloud, type_of_destination, tech_stack,
       hubspot_owner_id, owner_assigned_date, create_date, mql_date,
-      hs_analytics_source, size_of_business,
+      hs_analytics_source, size_of_business, bucket,
       icp_score, icp_category, icp_priority, breakdown_json, last_scored_at,
       synced_at, raw_properties
     ) VALUES (
@@ -160,7 +163,7 @@ function upsertContact(c) {
       @lifecyclestage, @lead_source, @mql_type,
       @source_cloud, @destination_cloud, @type_of_destination, @tech_stack,
       @hubspot_owner_id, @owner_assigned_date, @create_date, @mql_date,
-      @hs_analytics_source, @size_of_business,
+      @hs_analytics_source, @size_of_business, @bucket,
       @icp_score, @icp_category, @icp_priority, @breakdown_json, @last_scored_at,
       @synced_at, @raw_properties
     )
@@ -181,7 +184,7 @@ const upsertContactsBatch = (contacts) => {
       lifecyclestage, lead_source, mql_type,
       source_cloud, destination_cloud, type_of_destination, tech_stack,
       hubspot_owner_id, owner_assigned_date, create_date, mql_date,
-      hs_analytics_source, size_of_business,
+      hs_analytics_source, size_of_business, bucket,
       icp_score, icp_category, icp_priority, breakdown_json, last_scored_at,
       synced_at, raw_properties
     ) VALUES (
@@ -190,7 +193,7 @@ const upsertContactsBatch = (contacts) => {
       @lifecyclestage, @lead_source, @mql_type,
       @source_cloud, @destination_cloud, @type_of_destination, @tech_stack,
       @hubspot_owner_id, @owner_assigned_date, @create_date, @mql_date,
-      @hs_analytics_source, @size_of_business,
+      @hs_analytics_source, @size_of_business, @bucket,
       @icp_score, @icp_category, @icp_priority, @breakdown_json, @last_scored_at,
       @synced_at, @raw_properties
     )
@@ -564,33 +567,42 @@ function getDashboardStats() {
   return { total, scored, categoryCount, geographyCount, highPriority };
 }
 
+const SEG_CATS = ['Core ICP', 'Strong ICP', 'Moderate ICP', 'Non ICP'];
+
+// Build per-segment (Size-of-Business) stats from a list of rows. Each row needs
+// { segment (or size_of_business), icp_category, bucket }. For every segment we
+// track the total, the ICP-category counts, and the bucket-grade counts (A/B/C/D/E).
+// The HubSpot "bucket" field is a checkbox enum, so a value may be ";"-separated;
+// each grade is counted, and rows with no bucket fall under "Unassigned".
+function aggregateSegments(rows) {
+  const result = {};
+  for (const r of rows) {
+    const rawSeg = r.segment !== undefined ? r.segment : r.size_of_business;
+    const seg = (rawSeg && String(rawSeg).trim()) ? String(rawSeg).trim() : 'Others';
+    if (!result[seg]) {
+      result[seg] = { total: 0, buckets: {} };
+      SEG_CATS.forEach(c => { result[seg][c] = 0; });
+    }
+    const s = result[seg];
+    s.total++;
+    if (SEG_CATS.includes(r.icp_category)) s[r.icp_category]++;
+    const rawBucket = (r.bucket || '').trim();
+    if (!rawBucket) {
+      s.buckets.Unassigned = (s.buckets.Unassigned || 0) + 1;
+    } else {
+      rawBucket.split(';').map(v => v.trim()).filter(Boolean).forEach(v => {
+        s.buckets[v] = (s.buckets[v] || 0) + 1;
+      });
+    }
+  }
+  return result;
+}
+
+// Dashboard segment breakdown — across ALL contacts (ICP + bucket per segment).
 function getSegmentStats() {
   const db = getDb();
-  const rows = db.prepare(`
-    SELECT
-      CASE
-        WHEN size_of_business IS NOT NULL AND TRIM(size_of_business) != '' THEN TRIM(size_of_business)
-        ELSE 'Others'
-      END AS segment,
-      COALESCE(icp_category, 'Unscored') AS icp_category,
-      COUNT(*) AS cnt
-    FROM contacts
-    GROUP BY segment, icp_category
-  `).all();
-
-  const CATS = ['Core ICP', 'Strong ICP', 'Moderate ICP', 'Non ICP'];
-  const result = {};
-
-  for (const r of rows) {
-    if (!result[r.segment]) {
-      result[r.segment] = { total: 0 };
-      CATS.forEach(c => { result[r.segment][c] = 0; });
-    }
-    result[r.segment].total += r.cnt;
-    if (CATS.includes(r.icp_category)) result[r.segment][r.icp_category] += r.cnt;
-  }
-
-  return result;
+  const rows = db.prepare('SELECT size_of_business, icp_category, bucket FROM contacts').all();
+  return aggregateSegments(rows);
 }
 
 function getContactsList() {
@@ -671,7 +683,7 @@ function getRepStats(filters = {}) {
         ownerName: owner?.name || 'Unknown',
         ownerEmail: owner?.email || '',
         ownerTeams: owner?.teams_json ? JSON.parse(owner.teams_json).map(t => t.name).join(', ') : '',
-        totalLeads: 0, mqls: 0, categories: {},
+        totalLeads: 0, mqls: 0, categories: {}, buckets: {},
         scoreRanges: { s80_100: 0, s65_79: 0, s50_64: 0, s0_49: 0 },
         _totalScore: 0, _scoredCnt: 0, avgScore: 0
       };
@@ -681,6 +693,15 @@ function getRepStats(filters = {}) {
     if (l.mql_date || l.lifecyclestage === 'marketingqualifiedlead') o.mqls++;
     const cat = l.icp_category || 'Unscored';
     o.categories[cat] = (o.categories[cat] || 0) + 1;
+    // Bucket grade (A/B/C/D/E) — checkbox field, may be ";"-separated; count each.
+    const rawB = (l.bucket || '').trim();
+    if (rawB) {
+      rawB.split(';').map(v => v.trim()).filter(Boolean).forEach(v => {
+        o.buckets[v] = (o.buckets[v] || 0) + 1;
+      });
+    } else {
+      o.buckets.Unassigned = (o.buckets.Unassigned || 0) + 1;
+    }
     if (l.icp_score != null) {
       if (l.icp_score >= 80) o.scoreRanges.s80_100++;
       else if (l.icp_score >= 65) o.scoreRanges.s65_79++;
@@ -787,6 +808,8 @@ function migrateFromJsonStore() {
         create_date: l.createdate || null,
         mql_date: l.mqlDate || null,
         hs_analytics_source: null,
+        size_of_business: l.sizeOfBusiness || null,
+        bucket: l.bucket || null,
         icp_score: l.score ?? null,
         icp_category: l.category || null,
         icp_priority: l.priority || null,

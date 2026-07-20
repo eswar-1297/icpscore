@@ -326,7 +326,7 @@ function switchView(view) {
   document.querySelector(`.nav-item[data-view="${view}"]`)?.classList.add('active');
 
   const titles = {
-    dashboard:'Dashboard', 'rep-tracker':'Rep Tracker', 'hubspot-pull':'HubSpot Pull',
+    dashboard:'Dashboard', 'rep-tracker':'Sales Reps', 'hubspot-pull':'HubSpot Pull',
     pdf:'File Upload', contacts:'Contacts', combinations:'Combinations', outbound:'Outbound Leads'
   };
   document.getElementById('pageTitle').textContent = titles[view] || 'ICP Score';
@@ -467,14 +467,75 @@ async function loadDashboard() {
   } catch (err) { showToast('Dashboard error: ' + err.message); }
 }
 
+// Order of bucket grades (HubSpot "bucket" checkbox enum), unknowns/Unassigned last.
+const BUCKET_ORDER = ['A', 'B', 'C', 'D', 'E'];
+function sortBucketKeys(keys) {
+  return keys.slice().sort((a, b) => {
+    const ai = BUCKET_ORDER.indexOf(a), bi = BUCKET_ORDER.indexOf(b);
+    if (ai !== -1 && bi !== -1) return ai - bi;
+    if (ai !== -1) return -1;
+    if (bi !== -1) return 1;
+    return a.localeCompare(b);
+  });
+}
+
+// Render one card with an ICP-category column and a bucket-grade column side by
+// side. Shared by the Dashboard segment cards and the Sales Reps team cards.
+//   opts: { title, total, subtitle, icp, buckets, bucketKeys }
+//   - icp: object keyed by 'Core ICP' / 'Strong ICP' / 'Moderate ICP' / 'Non ICP'
+//   - buckets: object keyed by grade (A..E, Unassigned)
+//   - bucketKeys: ordered list of bucket grades to show (shared across all cards)
+function icpBucketCardHTML({ title, total, subtitle, icp, buckets, bucketKeys }) {
+  const t = total || 0;
+  const ic = icp || {};
+  const bk = buckets || {};
+  const icpRow = (key, label, dot) =>
+    `<div class="seg-row"><span class="seg-dot ${dot}"></span><span class="seg-cat">${label}</span><span class="seg-cnt">${ic[key] || 0}</span><span class="seg-cnt-pct">${pct(ic[key] || 0, t)}</span></div>`;
+  const bucketRow = (k) => {
+    const n = bk[k] || 0;
+    const label = k === 'Unassigned' ? 'U' : k;   // show Unassigned as "U"
+    return `<div class="seg-row"><span class="seg-badge">${escHtml(label)}</span><span style="flex:1"></span><span class="seg-cnt">${n}</span><span class="seg-cnt-pct">${pct(n, t)}</span></div>`;
+  };
+  return `
+    <div class="segment-card">
+      <div class="seg-title">${escHtml(title)}</div>
+      <div class="seg-total">${t}</div>
+      <div class="seg-total-pct">${subtitle}</div>
+      <div class="seg-cols">
+        <div class="seg-col">
+          <div class="seg-col-title">ICP</div>
+          ${icpRow('Core ICP', 'Core', 'dot-core')}
+          ${icpRow('Strong ICP', 'Strong', 'dot-strong')}
+          ${icpRow('Moderate ICP', 'Moderate', 'dot-moderate')}
+          ${icpRow('Non ICP', 'Non', 'dot-non')}
+        </div>
+        <div class="seg-col">
+          <div class="seg-col-title">Bucket</div>
+          ${bucketKeys.length ? bucketKeys.map(bucketRow).join('') : '<div class="seg-row" style="color:var(--muted)">—</div>'}
+        </div>
+      </div>
+    </div>`;
+}
+
+// Collect the union of bucket grades present across a set of items (each with a
+// `.buckets` object), ordered A..E then anything else.
+function collectBucketKeys(items) {
+  const set = new Set();
+  items.forEach(it => Object.keys(it.buckets || {}).forEach(b => {
+    if ((it.buckets[b] || 0) > 0) set.add(b);
+  }));
+  return sortBucketKeys([...set]);
+}
+
+// Segment (Size-of-Business) cards — ICP + bucket breakdown per segment.
 function renderSegmentCards(segs, containerId = 'segmentCardsRow') {
   const container = document.getElementById(containerId);
+  if (!container) return;
   if (!segs || !Object.keys(segs).length) {
     container.innerHTML = '<p style="color:var(--muted);font-size:13px">No segment data — run a sync first.</p>';
     return;
   }
   const ORDER = ['SMB', 'MSP', 'Large MSP', 'Enterprise', 'Others'];
-  // Sort: known order first, then alphabetically
   const keys = Object.keys(segs).sort((a, b) => {
     const ai = ORDER.indexOf(a), bi = ORDER.indexOf(b);
     if (ai !== -1 && bi !== -1) return ai - bi;
@@ -482,24 +543,19 @@ function renderSegmentCards(segs, containerId = 'segmentCardsRow') {
     if (bi !== -1) return 1;
     return a.localeCompare(b);
   });
-  // Grand total across all segments — used for each segment's share of the whole.
   const grandTotal = keys.reduce((sum, k) => sum + (segs[k].total || 0), 0);
+  const bucketKeys = collectBucketKeys(keys.map(k => segs[k]));
+
   container.innerHTML = keys.map(seg => {
     const s = segs[seg];
-    const t = s.total || 0;
-    const row = (cat, dot) => `<div class="seg-row"><span class="seg-dot ${dot}"></span><span class="seg-cat">${cat}</span><span class="seg-cnt">${s[cat] || 0}</span><span class="seg-cnt-pct">${pct(s[cat] || 0, t)}</span></div>`;
-    return `
-      <div class="segment-card">
-        <div class="seg-title">${seg}</div>
-        <div class="seg-total">${t}</div>
-        <div class="seg-total-pct">${pct(t, grandTotal)} of all</div>
-        <div class="seg-breakdown">
-          ${row('Core ICP', 'dot-core')}
-          ${row('Strong ICP', 'dot-strong')}
-          ${row('Moderate ICP', 'dot-moderate')}
-          ${row('Non ICP', 'dot-non')}
-        </div>
-      </div>`;
+    return icpBucketCardHTML({
+      title: seg,
+      total: s.total || 0,
+      subtitle: `${pct(s.total || 0, grandTotal)} of all`,
+      icp: s,
+      buckets: s.buckets,
+      bucketKeys
+    });
   }).join('');
 }
 
@@ -874,7 +930,7 @@ function renderTeamBreakdownHS(ownerBreakdown) {
     const teams = o.ownerTeams ? o.ownerTeams.split(', ').filter(Boolean) : ['No Team'];
     teams.forEach(teamName => {
       if (!teamMap[teamName]) {
-        teamMap[teamName] = { teamName, repCount: 0, totalLeads: 0, _tScore: 0, _tCount: 0, avgScore: 0, categories: {} };
+        teamMap[teamName] = { teamName, repCount: 0, totalLeads: 0, _tScore: 0, _tCount: 0, avgScore: 0, categories: {}, buckets: {} };
       }
       const t = teamMap[teamName];
       t.repCount++;
@@ -884,13 +940,57 @@ function renderTeamBreakdownHS(ownerBreakdown) {
       Object.entries(o.categories || {}).forEach(([cat, cnt]) => {
         t.categories[cat] = (t.categories[cat] || 0) + cnt;
       });
+      Object.entries(o.buckets || {}).forEach(([b, cnt]) => {
+        t.buckets[b] = (t.buckets[b] || 0) + cnt;
+      });
     });
   });
   Object.values(teamMap).forEach(t => {
     t.avgScore = t._tCount > 0 ? Math.round(t._tScore / t._tCount) : 0;
     delete t._tScore; delete t._tCount;
   });
-  renderTeamBreakdown(Object.values(teamMap).sort((a, b) => b.totalLeads - a.totalLeads), true);
+  const teams = Object.values(teamMap).sort((a, b) => b.totalLeads - a.totalLeads);
+  renderTeamCards(teams);
+  renderTeamBreakdown(teams, true);
+}
+
+// Team cards — same visual style as the Dashboard segment cards, one per HubSpot team.
+function renderTeamCards(teams) {
+  const container = document.getElementById('repTeamCards');
+  if (!container) return;
+  if (!teams || !teams.length) {
+    container.innerHTML = '<p style="color:var(--muted);font-size:13px">No team data — run a sync first.</p>';
+    return;
+  }
+  // Preferred order: SMB → Large MSP/Enterprise → Account Management.
+  // Match by keyword so slight name variations in HubSpot still sort correctly;
+  // anything unrecognized falls to the end by lead count.
+  const teamRank = (name = '') => {
+    const n = name.toLowerCase();
+    if (n.includes('smb')) return 0;
+    if (n.includes('large') || n.includes('msp') || n.includes('enterprise')) return 1;
+    if (n.includes('account')) return 2;
+    return 3;
+  };
+  const sorted = [...teams].sort((a, b) => {
+    const ra = teamRank(a.teamName), rb = teamRank(b.teamName);
+    if (ra !== rb) return ra - rb;
+    return (b.totalLeads || 0) - (a.totalLeads || 0);
+  });
+  const grandTotal = sorted.reduce((s, t) => s + (t.totalLeads || 0), 0);
+  const bucketKeys = collectBucketKeys(sorted);
+
+  container.innerHTML = sorted.map(t => {
+    const total = t.totalLeads || 0;
+    return icpBucketCardHTML({
+      title: t.teamName,
+      total,
+      subtitle: `${pct(total, grandTotal)} of all · ${t.repCount} rep${t.repCount === 1 ? '' : 's'} · Avg ${t.avgScore || 0}`,
+      icp: t.categories,
+      buckets: t.buckets,
+      bucketKeys
+    });
+  }).join('');
 }
 
 function renderTeamBreakdown(teams, isHubspot = false) {

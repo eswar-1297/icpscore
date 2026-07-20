@@ -71,6 +71,7 @@ const CONTACT_PROPERTIES = [
   'type_of_destination',       // Destination cloud enum (Office 365, Google Workspace, Teams)
   'source_destination',        // Source_Cloud alias
   'size_of_business',          // Company size segment (SMB, MSP, Large MSP, Enterprise)
+  'bucket',                    // Lead bucket grade (A, B, C, D, E) — HubSpot checkbox enum
   'hubspot_team_id'            // Built-in Sales Property: HubSpot Team (stores team ID)
   // select_country added dynamically via SELECT_COUNTRY_FIELD env var
 ];
